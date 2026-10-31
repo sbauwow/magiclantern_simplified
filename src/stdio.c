@@ -97,7 +97,9 @@ snprintf(
         return -1;
     }
 #pragma GCC diagnostic push
+#if __GNUC__ >= 7
 #pragma GCC diagnostic ignored "-Wnonnull-compare"
+#endif
 // we can't control how this is used at runtime, so,
 // suppress gcc's annoying warning.  I don't know why it believes
 // it must be non-null.

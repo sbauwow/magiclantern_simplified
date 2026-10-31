@@ -278,9 +278,17 @@ static int get_default_white_level()
     //~ { "Canon EOS 6D", 0, 0,
     //~ { 7034,-804,-1014,-4420,12564,2058,-851,1994,5758 } },
     #define CAM_COLORMATRIX1                       \
-     7034, 10000,     -804, 10000,    -1014, 10000,\
+     7034, 10000,     -804, 10000,   -1014, 10000,\
     -4420, 10000,    12564, 10000,    2058, 10000, \
      -851, 10000,     1994, 10000,    5758, 10000
+#endif
+
+#ifdef CONFIG_1200D
+    /* DCRAW: 1200D = 600D 18MP sensor family matrix; raw disabled anyway */
+    #define CAM_COLORMATRIX1                        \
+      6461, 10000,     -907, 10000,    -882, 10000,\
+     -4300, 10000,     12184, 10000,    2378, 10000, \
+      -819, 10000,      1944, 10000,    5931, 10000
 #endif
 
 #ifdef CONFIG_500D
@@ -553,6 +561,10 @@ static int dynamic_ranges[] = {1116, 1112, 1092, 1066, 1005, 909, 813, 711, 567}
 #endif
 
 #ifdef CONFIG_6D
+static int dynamic_ranges[] = {1143, 1139, 1122, 1087, 1044, 976, 894, 797, 683, 624, 505};
+#endif
+
+#ifdef CONFIG_1200D /* placeholder; raw disabled for now */
 static int dynamic_ranges[] = {1143, 1139, 1122, 1087, 1044, 976, 894, 797, 683, 624, 505};
 #endif
 

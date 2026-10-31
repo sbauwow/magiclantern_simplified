@@ -62,11 +62,11 @@ CFLAGS = -Os -D__ARM__ \
     -I$(TOP_DIR)/include \
     -Wall \
     -Wextra \
+    -Wno-missing-field-initializers \
     -Werror-implicit-function-declaration \
     -Wdouble-promotion \
     -Winline \
     -Wundef \
-    -Wnull-dereference \
     -Wno-unused-parameter \
     -Wno-unused-function \
     -Wno-format \
