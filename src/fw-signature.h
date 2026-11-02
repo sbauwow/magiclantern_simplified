@@ -29,7 +29,7 @@
 //#define SIG_6D2_105  0x0c042362 // from E0040000
 #define SIG_6D2_111  0x7dc0d132 // from E0040000
 #define SIG_700D_115 0x4c2d9f68 // from FF0C0000
-#define SIG_1200D_102 0x4E6D3DEE // computed from camera ROM dump (wordsum 0x10000 @ FF0C0000)
+#define SIG_1200D_102 0xBA19C526 // from camera ROM dump: wordsum 0x10000 WORDS @ FF0C0000
 #define SIG_70D_112  0xd8698f05
 #define SIG_750D_110 0xf005931a // from FC0A0000
 //#define SIG_77D_102  0x6dd89c83 // from e0040000

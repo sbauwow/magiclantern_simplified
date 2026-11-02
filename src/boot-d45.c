@@ -58,7 +58,7 @@ copy_and_restart( int offset )
     qprint("[BOOT] changing init_task from "); qprintn(INSTR( HIJACK_INSTR_MY_ITASK ));
     qprint("to "); qprintn((uint32_t) my_init_task); qprint("\n");
     INSTR( HIJACK_INSTR_MY_ITASK ) = (uint32_t) my_init_task;
-    
+
     // Make sure that our self-modifying code clears the cache
     sync_caches();
 
