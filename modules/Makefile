@@ -51,6 +51,7 @@ ML_MODULES = \
     selftest \
     adv_int \
     crop_rec \
+    adtg_log \
     dev_tools/edmac \
     sd_clock \
     raw_video/raw_vidx \

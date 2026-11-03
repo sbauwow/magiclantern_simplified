@@ -23,6 +23,7 @@ mlv_rec
 mlv_snd
 pic_view
 raw_vidx
+adtg_log
 sd_clock
 selftest
 silent
