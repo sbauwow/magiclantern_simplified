@@ -154,9 +154,9 @@ static struct menu_entry adtg_log_menu[] =
 
 static unsigned int adtg_log_init()
 {
-#if defined(CONFIG_1200D)
+    /* CONFIG_1200D-only module (modules.included); guard removed so the
+       standalone module make (no platform defines) still references the menu */
     menu_add("Debug", adtg_log_menu, COUNT(adtg_log_menu));
-#endif
     return 0;
 }
 
