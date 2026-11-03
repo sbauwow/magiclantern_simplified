@@ -155,7 +155,7 @@ extern void
 audio_ic_sweep_message_queue( void );
 
 
-#ifdef CONFIG_600D
+#if defined(CONFIG_600D) || defined(CONFIG_1200D)
 
 #define OP_MULTIPLE    0
 #define OP_STANDALONE  1

@@ -69,8 +69,10 @@
 /** Bulb mode is done by going to M mode and setting shutter speed beyond 30s **/
 //~ #define CONFIG_SEPARATE_BULB_MODE
 
-/** We can't control audio settings from ML **/
-//~ #define CONFIG_AUDIO_CONTROLS
+/** We can control audio settings from ML — 1200D has a LAPIS codec (600D family,
+ ** ROM-verified 2026-11-02); audio-lapis.o driver + 1200D write shim in audio-lapis.c.
+ ** Chip revision differs slightly from 600D (writes 0x1D, 0xED) — validate reg map on hw. **/
+#define CONFIG_AUDIO_CONTROLS
 
 /** Zoom button can be used while recording (for Magic Zoom) **/
 //~ #define CONFIG_ZOOM_BTN_NOT_WORKING_WHILE_RECORDING

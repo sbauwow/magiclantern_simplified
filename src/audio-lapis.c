@@ -30,8 +30,32 @@
 #include "console.h"
 #include "audio-common.c"
 
+#ifdef CONFIG_1200D
+/* 1200D: the ROM's audio-IC write API is SendDataForAudioIC at 0xFF11C304
+ * (Audio\AudioIC.c; DebugMsg "SendDataForAudioIC: RegNum(0x%02X) Data(0x%02X)").
+ * It takes a pointer to {u16 reg; u16 pad; u16 data; u16 pad2}; reg/data are
+ * the low bytes of each halfword. ML's Lapis driver passes a single 16-bit
+ * command word (reg << 8 | value) — convert and forward.
+ * (The stubbed 0xFF2AD25C is a descriptor-list walker, incompatible with the
+ * single-command call convention; _audio_ic_read at 0xFF2AD554 matches ML's
+ * (cmd, &result) convention directly and stays in stubs.S.) */
+struct audio_ic_cmd_1200d { uint16_t reg; uint16_t pad; uint16_t data; uint16_t pad2; };
+
+void _audio_ic_write(unsigned cmd)
+{
+    struct audio_ic_cmd_1200d c = { (uint16_t)(cmd >> 8), 0, (uint16_t)(cmd & 0xFF), 0 };
+    void __attribute__((long_call)) (*send)(void *) = (void *) 0xFF11C304;
+    send(&c);
+}
+#endif
+
+
 // Set defaults
 CONFIG_INT_EX( "audio.override_audio", cfg_override_audio,   0, override_audio_on_change );
+
+/* fwd decls: used in mute paths before their definitions below */
+static void audio_ic_set_lineout_vol();
+static void audio_ic_set_lineout_onoff(int op_mode);
 CONFIG_INT_EX( "audio.analog_gain",    cfg_analog_gain,      0, analog_gain_on_change );
 CONFIG_INT_EX( "audio.analog_boost",   cfg_analog_boost,     0, analog_boost_on_change ); //test
 CONFIG_INT_EX( "audio.enable_dc",      cfg_filter_dc,        1, audio_filter_on_change );
@@ -52,6 +76,7 @@ int audio_meters_are_drawn()
     return audio_meters_are_drawn_common();
 }
 
+#ifdef FEATURE_HEADPHONE_MONITORING
 static void audio_monitoring_update()
 {
     if (cfg_override_audio == 0) return;
@@ -69,13 +94,16 @@ static void audio_monitoring_update()
         audio_ic_set_lineout_onoff(OP_STANDALONE);
     }
 }
+#endif
 
 
 static void
 audio_ic_set_mute_on(unsigned int wait){
+#ifndef CONFIG_1200D
     if(audio_monitoring){
         audio_ic_write(ML_HP_AMP_VOL | 0x0E); // headphone mute
     }
+#endif
     masked_audio_ic_write(ML_AMP_VOLFUNC_ENA,0x02,0x02); //mic in vol to -12
     msleep(wait);
 }
@@ -250,7 +278,12 @@ audio_ic_off(){
     audio_ic_write(ML_MIC_BOOST_VOL2 | ML_MIC_BOOST_VOL2_OFF);
     audio_ic_write(ML_MIC_IN_VOL | ML_MIC_IN_VOL_2);
     audio_ic_write(ML_PW_ZCCMP_PW_MNG | 0x00); //power off
+#ifdef CONFIG_1200D
+    /* leave reference power in Canon's post-init state (NORMAL), not all-off */
+    audio_ic_write(ML_PW_REF_PW_MNG | 0x02); // ML_PW_REF_PW_NORMAL
+#else
     audio_ic_write(ML_PW_REF_PW_MNG | ML_PW_REF_PW_MNG_ALL_OFF);
+#endif
 
     audio_ic_write(ML_RECPLAY_STATE | ML_RECPLAY_STATE_STOP);
     audio_ic_write(ML_HPF2_CUTOFF | ML_HPF2_CUTOFF_FREQ200);
@@ -272,23 +305,34 @@ audio_ic_on(){
 
 static void
 audio_ic_set_lineout_vol(){
+#ifdef CONFIG_1200D
+    /* 1200D: input-side control only — output volumes belong to Canon */
+    (void)0;
+#else
     int vol = MIN(lovl*2, 11) + 0x0E + 38; // lovl=0 => default to 0 dB; max 11 dB
     audio_ic_write(ML_HP_AMP_VOL | vol);
 
     //This can be more boost headphone monitoring volume.Need good menu interface
     audio_ic_write(ML_PLYBAK_BOST_VOL | ML_PLYBAK_BOST_VOL_DEF );
-
+#endif
 }
 
 
 static void
 audio_ic_set_lineout_onoff(int op_mode){
+#ifdef CONFIG_1200D
+    /* 1200D: input-side control only. The 600D logic here powers off the DAC,
+     * headphone amp and SPEAKER AMP when override is on without monitoring —
+     * on the T5 that silences the camera's own clip playback (no A/V monitoring
+     * on this body). Leave the entire output path to Canon firmware. */
+    (void)op_mode;
+#else
     //PDF p38
     if(audio_monitoring &&
        AUDIO_MONITORING_HEADPHONES_CONNECTED &&
        cfg_override_audio==1){
         if(op_mode) audio_ic_set_mute_on(30);
-        
+
         if(op_mode) audio_ic_write(ML_RECPLAY_STATE | ML_RECPLAY_STATE_STOP); //directly change prohibited p55
 
         audio_ic_write(ML_PW_REF_PW_MNG | ML_PW_REF_PW_HP_STANDARD | ML_PW_REF_PW_MICBEN_ON | ML_PW_REF_PW_HISPEED); //HeadPhone amp-std voltage(HPCAP pin voltage) gen circuit power on.
@@ -307,16 +351,17 @@ audio_ic_set_lineout_onoff(int op_mode){
     }else{
         if(cfg_override_audio==1){
             if(op_mode) audio_ic_set_mute_on(30);
-        
+
             if(op_mode) audio_ic_write(ML_RECPLAY_STATE | ML_RECPLAY_STATE_STOP); //directory change prohibited p55
             audio_ic_write(ML_PW_DAC_PW_MNG | ML_PW_DAC_PW_MNG_PWROFF); //DAC power on
             audio_ic_write(ML_HP_AMP_OUT_CTL | 0x0);
             audio_ic_write(ML_PW_SPAMP_PW_MNG | ML_PW_SPAMP_PW_MNG_OFF);
-            
+
             if(op_mode) audio_ic_write(ML_RECPLAY_STATE | ML_RECPLAY_STATE_AUTO_ON | ML_RECPLAY_STATE_REC);
             if(op_mode) audio_ic_set_mute_off(80);
         }
     }
+#endif
 }
 
 static void
@@ -375,7 +420,9 @@ audio_configure( int force )
     audio_ic_set_effect_mode();
     audio_ic_set_agc();
     audio_ic_set_lineout_onoff(OP_MULTIPLE);
+#ifdef FEATURE_HEADPHONE_MONITORING
     audio_monitoring_update();
+#endif
     audio_ic_set_recplay_state();
 
     audio_ic_set_mute_off(80);
@@ -539,6 +586,61 @@ static MENU_UPDATE_FUNC(audio_recdgain_display)
 
 }
 
+/* ---- 1200D codec diagnostics + re-assert (needs the setters above) ----
+ * A/B clips showed override writes not affecting recorded level. Two suspects:
+ * Canon re-inits the codec when recording starts (600D re-asserts via prop
+ * handlers unavailable here), or transport/map issues. Ships both the fix
+ * candidate and the diagnostic. */
+#ifdef CONFIG_1200D
+static const uint16_t audio_dbg_regs_1200d[] = {
+    0x21, 0x23, 0x25, 0x27,   /* ref/in/dac/spamp power */
+    0x13,                     /* recplay state */
+    0x33, 0x39, 0xE3,         /* mic in vol, boost1, boost2 (0xE3 = 600D addr, rev-suspect) */
+    0x49, 0x57,               /* amp volfunc, hp amp out ctl */
+    0x67, 0x69, 0x6B, 0x6D,   /* filter en, dvol ctl, mixer vol, rec digi vol */
+    0x6F, 0x7F, 0xB9,         /* rec l/r bal, hpf2 cutoff, alc target lev */
+};
+
+static void audio_reg_dump_1200d_task(void* unused)
+{
+    (void)unused;
+    /* write-test: force a known MIC_IN_VOL value, read it back */
+    audio_ic_write(ML_MIC_IN_VOL | 0x18);
+    msleep(50);
+    int wt = audio_ic_read(ML_MIC_IN_VOL);
+
+    bmp_printf(FONT_MED, 10, 40, "Lapis dump  wr-test r33: w=0x18 r=0x%02x", wt);
+    for (uint32_t i = 0; i < COUNT(audio_dbg_regs_1200d); i++)
+    {
+        bmp_printf(FONT_MED, 10 + (i/8)*300, 60 + (i%8)*20, "r%02x=0x%02x ",
+            audio_dbg_regs_1200d[i], audio_ic_read(audio_dbg_regs_1200d[i] << 8));
+    }
+    msleep(10000);
+    audio_ic_set_analog_gain(); /* restore user setting after write-test */
+}
+
+/* Re-apply ML input settings while the input path is active. Canon re-inits
+ * the codec at recording start; on 600D ML re-asserts via audio property
+ * handlers (1200D prop IDs not RE'd), so poll instead. Idempotent writes. */
+static void audio_reassert_task_1200d(void* unused)
+{
+    (void)unused;
+    TASK_LOOP
+    {
+        msleep(500);
+        if (cfg_override_audio && is_movie_mode())
+        {
+            audio_ic_set_analog_gain();
+            audio_ic_set_micboost();
+            audio_ic_set_agc();
+            audio_ic_set_recdgain();
+        }
+    }
+}
+
+TASK_CREATE("audio_reassert", audio_reassert_task_1200d, 0, 0x18, 0x800);
+#endif
+
 static struct menu_entry audio_menus[] = {
     {
         .name        = "Override audio settings",
@@ -654,6 +756,14 @@ static struct menu_entry audio_menus[] = {
             MENU_EOL
         }
     },
+#ifdef CONFIG_1200D
+    {
+        .name           = "Codec reg dump (1200D)",
+        .priv           = audio_reg_dump_1200d_task,
+        .select         = run_in_separate_task,
+        .help           = "Show Lapis codec registers on screen for 10s (write-test r33)",
+    },
+#endif
 #ifdef CONFIG_AUDIO_REG_LOG
     {
         .priv           = "Close register log",
@@ -727,6 +837,11 @@ void out_volume_down()
     out_volume_display();
 }
 
+/* 1200D: PROP_AUDIO_VOL_CHANGE / PLAYMODE property IDs not yet RE'd for this
+ * model (600D uses 0x2050017 / 0x205000D / 0x205000F). Skipping these handlers
+ * only means ML won't auto-reassert its audio config right after you change
+ * volume in Canon's own menu. Add the 1200D IDs here once RE'd. */
+#ifndef CONFIG_1200D
 PROP_HANDLER( PROP_AUDIO_VOL_CHANGE_600D )
 {
     /* Cannot overwrite audio config direct here!
@@ -738,11 +853,14 @@ PROP_HANDLER( PROP_AUDIO_VOL_CHANGE_600D )
 
 PROP_HANDLER( PROP_PLAYMODE_LAUNCH_600D )
 {
+#ifdef FEATURE_HEADPHONE_MONITORING
     audio_monitoring_update();
+#endif
 }
 PROP_HANDLER( PROP_PLAYMODE_VOL_CHANGE_600D )
 {
 }
+#endif
 
 
 static void audio_menus_init()

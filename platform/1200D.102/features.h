@@ -24,3 +24,9 @@
 
 // not much memory
 #undef FEATURE_FLEXINFO
+
+/* 1200D: no headphone monitoring yet — HOTPLUG_VIDEO_OUT_STATUS_ADDR is not
+ * RE'd for this model (600D uses 0x1ac4; wrong guess would corrupt RAM).
+ * Re-enable after the address is found. Meters/gain/AGC unaffected. */
+#undef FEATURE_HEADPHONE_MONITORING
+#undef FEATURE_HEADPHONE_OUTPUT_VOLUME

@@ -379,13 +379,13 @@ static void draw_meters(void)
     
     draw_meter( x0, y0 + 0, 10, &audio_levels[0], left_label, width);
     draw_ticks( x0, y0 + 10, 2, width);
-#if !(defined(CONFIG_500D) || defined(CONFIG_1100D))         // mono mic on 500d and 1100d
+#if !(defined(CONFIG_500D) || defined(CONFIG_1100D) || defined(CONFIG_1200D))         // mono mic on 500d, 1100d, 1200d
     draw_meter( x0, y0 + 12, 10, &audio_levels[1], right_label, width);
 #endif
 
         if (gui_menu_shown() && alc_enable)
         {
-#ifdef CONFIG_600D
+#if defined(CONFIG_600D) || defined(CONFIG_1200D)
             int dgain_x1000 = audio_cmd_to_gain_x1000(audio_ic_read(ML_ALC_TARGET_LEV-0x100));
 #else
             int dgain_x1000 = audio_cmd_to_gain_x1000(audio_ic_read(AUDIO_IC_ALCVOL));

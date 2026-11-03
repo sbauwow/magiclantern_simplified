@@ -84,8 +84,9 @@ NSTUB(0xFF106444,  StopASIFDMADAC)
 
 /** Audio **/
 NSTUB(    0x1E50,  sounddev)
+// 1200D _audio_ic_write: implemented in C in audio-lapis.c (ROM 0xFF2AD25C is a
+// descriptor-list walker; single-command API is SendDataForAudioIC 0xFF11C304)
 NSTUB(0xFF2AD554, _audio_ic_read)
-NSTUB(0xFF2AD25C, _audio_ic_write)
 NSTUB(0xFF69B490,  audio_thresholds)
 NSTUB(0xFF10888C,  sounddev_active_in)
 NSTUB(0xFF108488,  sounddev_task)

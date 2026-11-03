@@ -124,9 +124,12 @@ init_task_func init_task_patched(void)
         while(1);                                       /* refuse to boot */
     }
 
-    #if defined(CONFIG_6D) || defined(CONFIG_100D) || defined(CONFIG_70D)
+    #if defined(CONFIG_6D) || defined(CONFIG_100D) || defined(CONFIG_70D) || defined(CONFIG_1200D)
     /* R0: 0x44C000 (start address, easier to patch, change to 0x4E0000 => reserve 592K for ML) */
     /* R1: 0xD3C000 [6D, 70D] / 0xC3C000 [100D] (end address, unchanged) */
+    /* 1200D: pool was [0x3D0000, 0xD00000); patch start -> 0x4E0000 => ML window
+     * [0x3D0000, 0x4E0000) = 1.1M at the pool bottom, Canon keeps [0x4E0000, 0xD00000).
+     * Replaces the previous top-carve (end -> 0xC80000) which left only 512K. */
     addr_AllocMem_end[1] = MOV_R0_0x4E0000_INSTR;
     ml_reserved_mem = 0x4E0000 - RESTARTSTART;
     #elif defined(CONFIG_550D) || defined(CONFIG_600D)
