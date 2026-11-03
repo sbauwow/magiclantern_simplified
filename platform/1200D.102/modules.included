@@ -1,1 +1,13 @@
-# Modules included in 1200D magiclantern.zip (bring-up: none yet, core only)
+# Modules included in 1200D magiclantern.zip
+# Verified loadable against core sym via host tcc replication (~/scripts/ml_host_tcc.c, HANDOFF 2026-11-02).
+# Blocked (raw/EDMAC/SRM/AFMA deps until RAW pipeline lands): crop_rec deflick dot_tune edmac ettr
+#   mlv_lite mlv_play mlv_rec mlv_snd pic_view raw_vidx selftest silent yolo
+adv_int
+arkanoid
+autoexpo
+bench
+dual_iso
+file_man
+img_name
+lua
+sd_clock
