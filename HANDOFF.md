@@ -658,3 +658,42 @@ Two emulator fixes (both in ~/qemu-eos working tree, UNCOMMITTED on top of 08d9e
   feeds the LV reuse-optimization). Build 2b4b2a2f..., 466688B, _bss_end 0x453C00, QEMU OK.
 - HW TEST: Canon menu → image quality RAW → photo mode → take a picture → during image review,
   ML histogram/overlays should run on the actual raw data. dual_iso becomes fully usable.
+
+## REPO STATE (2026-11-02 end of session)
+- Committed + PUSHED: fork github.com/sbauwow/magiclantern_simplified (remote "fork"),
+  branch 1200D-port @ 9a2ec09f8 (raw pipeline). Full commit stack: 4cdf92754 (orig port)
+  → 5339cf808 (AM boot hw-fix) → 5b8dfbb71 (modules set) → 1c414f379 (audio+window)
+  → 9a2ec09f8 (raw pipeline). Working tree clean.
+- Card currently runs the EDMAC-monitor diag build (1026980655...); awaiting EDMACMon.TXT
+  trace from a monitored RAW photo to finish RAW_PHOTO channel selection.
+
+## Session 2026-11-03 PM — OFFLINE CROP_REC PUSH (commits fb3e81f1d..a81ae9d9d, all pushed)
+- **Morning commits** (see skill session block): IDNT cameraModel=0 color fix, take_semaphore_now
+  0xFF122244 (raw_vidx in, 21 modules), mlv_ingest.sh pipeline, selftest.lua.
+- **crop_rec status**: fork's module is g3gg0 D5-ONLY (5D3/EOSM/700D/650D/100D/6D). dfort's D4
+  lineage UNRECOVERABLE (bitbucket dead; no GitHub default-branch mirror has D4 crop_rec —
+  checked dannephoto [stripped], hg_02 crop_rec branch [844-line 2014 version], petabyt
+  1300D [never had it], code search). Plan = self-reliant: dump -> derive -> port.
+- **RE'd writer fns (string-xref, 'Device\SIO\Sio0Driver.c' cluster)**:
+  ADTG_WRITE=0xFF3A246C (u32 lists, 0xFFFFFFFF term, MEM=0xE92D47F0),
+  CMOS_WRITE=0xFF3A265C (u16 (reg<<12)|val lists, 0xFFFF term, MEM=0xE92D41F0).
+  TgRegister-relative CMOS list offsets at call sites: +0x176/+0x1A/+0xF0/+0xFE;
+  16 CMOS + 83 ADTG call sites (0xFF279xxx TG driver + 0xFF498-499xxx PureCapture).
+- **adtg_log ported** (modules/adtg_log, 1200D addrs, this fork's gdb-watchpoint API:
+  callback(breakpoint_t*), regs at bkpt->ctx[0..16]). Debug tab "ADTG/CMOS log (1200D)":
+  watchpoints only, live CMOS display, dumps DCIM/adtg.bin. Self-validating (no animation
+  in LV = wrong addrs, nothing else touched). In modules.included + zip.
+- **Register corpus** (modules/crop_rec/1200D_reg_corpus.txt): 17 decoded ADTG tables from
+  ROM 0xFFC20000-24000. BASE-A1==A2, BASE-B1==B2 twins; VAR-5 vs VAR-6 differ in 3 regs,
+  ADTG 0x8826 = 0x2404 vs 0x0C00 (~3:1) = prime binned-vs-1:1 readout candidate.
+- **crop_rec.c CONFIG_1200D block**: hooks wired, basic presets, INERT by design
+  (D5 check_cmos_vidmode magic never matches on T5). Enable path = (1) adtg_log dump
+  across LV modes, (2) 1200D per-mode CMOS1/2/6 signatures into check_cmos_vidmode,
+  (3) preset values from corpus deltas.
+- **BUILD GOTCHA (cost 30 min)**: standalone `make -C modules/<mod>` leaves module_complete
+  that BYPASSES the modules-dir gather CP into modules/build/ -> platform zip fails with
+  copy_included_modules.py FileNotFoundError. Fix: rm modules/<mod>/build/module_complete
+  + modules/build/default_modules_complete, rerun platform make.
+- QEMU smoke: canonical 4-line boot on the full build (autoexec + 21+1 modules).
+- Next camera session: selftest.lua run + adtg_log across 1080p/720p/zoom x5/x10 (~10 min
+  total) -> unlocks BOTH photo-raw EDMAC answer and crop_rec mode tables.
