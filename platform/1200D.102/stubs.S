@@ -274,6 +274,11 @@ NSTUB(0xFF2A1208,  UnLockEngineResources)
 NSTUB(0xFF12213C,  create_named_semaphore)
 NSTUB(0xFF122384,  give_semaphore)
 NSTUB(0xFF12229C,  take_semaphore)
+/* live-proven in QEMU force-call test (ml_semtest.gdb): take(1)=0, take(0)=13 immediate
+   (non-blocking), give=0, take=0 — routes to the same take-primitive 0xFF0C7654 as
+   take_semaphore, single-arg, same Sem.c assert family; 0x58 before take_semaphore,
+   matching 500D/550D/600D/1100D layout */
+NSTUB(0xFF122244,  take_semaphore_now)
 
 /** Task info **/
 NSTUB(    0x295C,  task_max)

@@ -2,7 +2,9 @@
 # Verified via host tcc replication (~/scripts/ml_host_tcc.c) after the raw pipeline
 # landed 2026-11-02: 17 resolve against core; mlv_play/pic_view resolve from mlv_lite
 # and mlv_snd from mlv_rec at load time (cross-module imports).
-# Still blocked: dot_tune (AFMA stubs), raw_vidx (take_semaphore_now), yolo (wifi).
+# raw_vidx added 2026-11-03: take_semaphore_now RE'd (0xFF122244, live-proven in QEMU,
+# see stubs.S) — symbol gap now zero (comm vs t5_102.sym clean).
+# Still blocked: dot_tune (AFMA stubs), yolo (wifi).
 adv_int
 arkanoid
 autoexpo
@@ -20,6 +22,7 @@ mlv_play
 mlv_rec
 mlv_snd
 pic_view
+raw_vidx
 sd_clock
 selftest
 silent
