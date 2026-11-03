@@ -1,0 +1,28 @@
+ours   /home/stathis/magiclantern/platform/1200D.102/stubs.S: 170 stubs
+ref    /home/stathis/magiclantern/platform/1100D.105/stubs.S: 144 stubs, 2 missing from ours
+ref    /home/stathis/magiclantern/platform/600D.102/stubs.S: 147 stubs, 2 missing from ours
+ref    /home/stathis/magiclantern/platform/700D.115/stubs.S: 152 stubs, 5 missing from ours
+
+=== UNION WORKLIST: 5 names in refs but not in ours ===
+LiveViewShutterApp_handler                in: 700D.115
+get_task_info_by_id                       in: 1100D.105,600D.102,700D.115
+post_isr_hook                             in: 700D.115
+pre_isr_hook                              in: 700D.115
+take_semaphore_now                        in: 1100D.105,600D.102,700D.115
+
+=== OURS ONLY (15) — check correctness vs siblings ===
+BulkInIPCTransfer
+BulkOutIPCTransfer
+EnableImagePhysicalScreenParameter
+GUI_SetLvMode
+Gui_SetSoundRecord
+LiveViewWbApp_handler
+QuickOutIPCTransfer
+RegisterRPCHandler
+RequestRPC
+SoundDevShutDownIn
+StartPlayProtectGuideApp
+StopASIFDMAADC
+StopPlayProtectGuideApp
+gui_change_shoot_type_post
+is_taskid_valid

@@ -51,6 +51,9 @@ uint32_t edmac_write_chan = 0x06;
 #elif defined(CONFIG_1100D)
 uint32_t edmac_read_chan = 0x19;
 uint32_t edmac_write_chan = 0x04;
+#elif defined(CONFIG_1200D)
+uint32_t edmac_read_chan = 0x19;  /* D4-family universal free read chan (550D/600D/1100D/1300D all 0x19) */
+uint32_t edmac_write_chan = 0x04; /* 1100D value (closest sibling); VERIFY free during LV on hw via edmac.mo, 600D uses 0x06 */
 #elif defined(CONFIG_1300D)
 uint32_t edmac_read_chan = 0x19;
 uint32_t edmac_write_chan = 0x04;

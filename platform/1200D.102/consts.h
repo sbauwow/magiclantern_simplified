@@ -113,9 +113,21 @@
 #define YUV422_HD_BUFFER_2 0x47465c00
 // maybe there are more
 
+/* SRM suite params — 600D initial values, self-correcting per D45 experience:
+ * print the real buffer size from srm_malloc_cbr on hw and correct here. */
+#define SRM_BUFFER_SIZE 0x1F68000   /* print it from srm_malloc_cbr */
+#define SRM_MAX_BUF_COUNT_VIDEO_MODE 16 // probably not the true max, D45 cams all guess 16 and non-fatally fail if using too much
+
 // PLACEHOLDER UNTIL WE GET THE REAL VALUES
 #define YUV422_LV_BUFFER_DISPLAY_ADDR (*(uint32_t*)(0x2068+0xAC))
 #define YUV422_HD_BUFFER_DMA_ADDR (shamem_read(REG_EDMAC_WRITE_HD_ADDR))
+
+/* 1200D photo raw buffer NOT yet RE'd (600D: MEM(MEM(0x51FC))). Phase A raw-LV:
+ * null/zero makes raw.c's "reuse default buffer" optimization provably dead —
+ * LiveView always allocates its own buffer via SRM. Find the real chain
+ * (CCDWriteEDmacCompleteCBR route, raw.c:145 comments) for RAW_PHOTO. */
+#define DEFAULT_RAW_BUFFER ((void*)0)
+#define DEFAULT_RAW_BUFFER_SIZE 0
 
 // From Alex
 #define FOCUS_CONFIRMATION (*(int*)0x3EA8) // a1ex

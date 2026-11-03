@@ -158,7 +158,7 @@ static volatile struct edmac_mmio *raw_lv_edmac = (struct edmac_mmio *)RAW_LV_ED
  * and http://a1ex.bitbucket.org/ML/states/ for state diagrams.
  */
 
-#if defined(CONFIG_5D2) || defined(CONFIG_50D) || defined(CONFIG_60D) || defined(CONFIG_550D) || defined(CONFIG_500D) || defined(CONFIG_600D) || defined(CONFIG_1100D) || defined(CONFIG_7D) || defined(CONFIG_1300D)
+#if defined(CONFIG_5D2) || defined(CONFIG_50D) || defined(CONFIG_60D) || defined(CONFIG_550D) || defined(CONFIG_500D) || defined(CONFIG_600D) || defined(CONFIG_1100D) || defined(CONFIG_7D) || defined(CONFIG_1300D) || defined(CONFIG_1200D)
 #define RAW_PHOTO_EDMAC 0xc0f04208
 #endif
 

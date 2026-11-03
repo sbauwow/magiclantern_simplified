@@ -1,7 +1,8 @@
 #include "all_features.h"
 
-// No raw on 1200D yet (EDMAC/color RE pending) — disable raw-dependent features
-#undef FEATURE_RAW_HISTOGRAM
+// Raw histogram — raw LV pipeline compiled since 2026-11-02; re-enabled
+// (was disabled with "no raw on 1200D yet")
+#define FEATURE_RAW_HISTOGRAM
 
 // No MLU on the 1200D
 #undef FEATURE_MLU

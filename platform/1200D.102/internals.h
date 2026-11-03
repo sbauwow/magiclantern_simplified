@@ -20,8 +20,10 @@
 #define CONFIG_TASK_ATTR_STRUCT_V2
 #define CONFIG_MALLOC_STRUCT_V2
 
-/* SRM buffer alloc unverified on 1200D — old 2018 port never used it */
-#define CONFIG_MEMORY_SRM_NOT_WORKING
+/* SRM buffer alloc: stubs RE'd by mk11174 (0xFF0D9B14/0xFF0DC3A8); enabled 2026-11-02
+ * for the raw pipeline. SRM_BUFFER_SIZE initially copied from 600D — print real
+ * value from srm_malloc_cbr on hw and correct. */
+//#define CONFIG_MEMORY_SRM_NOT_WORKING
 
 /** This camera runs DryOS **/
 //~ #define CONFIG_VXWORKS
@@ -105,9 +107,10 @@
 /** We can use DMA_MEMCPY but it has no real benefit **/
 //~ #define CONFIG_DMA_MEMCPY
 /** We do know how to use edmac_memcpy. This one is really fast (600MB/s!) */
-/* EDMAC channels unverified for 1200D — find free channels from ROM before enabling
+/* EDMAC: bases are SoC-level for DIGIC 4 (0xC0F04000/0xC0F26000/0xC0F30000, shared
+ * code in src/edmac.c) and channels are discovered dynamically — enabled 2026-11-02
+ * for the raw pipeline; verify channel behaviour on hw via edmac.mo dump. */
 #define CONFIG_EDMAC_MEMCPY
-*/
 
 /** We should warn the user if movie exposure is Auto **/
 #define CONFIG_MOVIE_AE_WARNING
@@ -140,10 +143,16 @@
 #define CONFIG_MENU_WITH_AV
 
 /** We have access to raw data in both photo mode and in LiveView */
-/* Raw needs EDMAC/color-matrix RE the 2018 port never did — re-enable after ROM work
+/* Enabled 2026-11-02 raw-pipeline phase A (LV-first): RAW_LIVEVIEW uses dynamic
+ * EDMAC discovery (no model-specific buffer addrs). RAW_PHOTO enabled 2026-11-02
+ * phase B: RAW_PHOTO_EDMAC = 0xc0f04208 (D4-universal, every DIGIC 4 in the tree);
+ * the reader path is fully defensive (null/size checks -> declines cleanly). */
 #define CONFIG_RAW_LIVEVIEW
 #define CONFIG_RAW_PHOTO
-*/
+
+/* Same LV-raw path as the working 600D port: dynamically redirect the LV
+ * EDMAC instead of a hardcoded channel address (all EDMAC API stubs present). */
+#define CONFIG_EDMAC_RAW_SLURP
 
 /** There are no manual exposure controls in movie mode => we need expo override */
 //~ #define CONFIG_NO_MANUAL_EXPOSURE_MOVIE

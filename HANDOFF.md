@@ -504,3 +504,157 @@ Two emulator fixes (both in ~/qemu-eos working tree, UNCOMMITTED on top of 08d9e
 - AM-boot build (md5 6d4b8ea6fb22843ae06320d4209bc45e): camera boots, ML loads and works (menu via TRASH, banner 2026-11-02.1200D.102). First hardware boot of the simplified-fork port.
 - Card state: autoexec.bin = AM build; autoexec.2018-nightly.bak + autoexec.test1.bin = restore points.
 - REMAINING (ordered): (1) strip ML_BOOT_TRACE from internals.h + rebuild + reflash (markers add ~10s boot delay); (2) commit — Stathis's call; tree has AM fix + trace markers + earlier uncommitted fixes; (3) build 2026-era modules (card has 2018-era, won't load); (4) the RE gap list: 196 stubs, get_task_info_by_id, EDMAC channels, TG_FREQ verify, RAW pipeline re-enable.
+
+## NEXT-FRONTIER RECON (2026-11-02 evening — read before planning feature work)
+- STUBS: gap vs 2018 hg tree = ZERO (both 170 names — we carry everything the 2018 nightly used). Gap vs fork siblings = 5 names, 2 worth RE'ing: get_task_info_by_id (currently shimmed -1 in cfn.c), take_semaphore_now. Worklist: stub_gap_1200D.txt; tool: ~/scripts/ml_stub_gap.py.
+- PLATFORM CONFIG ≈ PARITY with 2018 nightly: the disabled features (CONFIG_RAW_LIVEVIEW/PHOTO, EDMAC_MEMCPY, SRM, raw histogram, MLU) were NEVER enabled in the 1200D 2018 port either — 2018's internals.h/consts.h have no extra values. The fork's "disabled state" is not a fork regression; the RAW/EDMAC/SRM work is genuinely new RE for this model. No free lunch to port from 2018.
+- MODULES: 23 built clean for 1200D (adv_int arkanoid autoexpo bench crop_rec deflick dot_tune dual_iso edmac ettr file_man img_name lua mlv_lite mlv_play mlv_rec mlv_snd pic_view raw_vidx sd_clock selftest silent yolo). They resolve against core exports at load time — stage all on card with next core flash; camera reports which load (raw-dependent ones will fail until RAW RE lands).
+- FRONTIER ORDER: (1) stage clean core + 23 modules (one card session, immediate value: lua/file_man/mlv_play/bench etc.); (2) RE the 2 stubs (ROM1.BIN scan, existing finder scripts); (3) the big rock = RAW pipeline: EDMAC channel map + raw buffer addrs via QEMU + hw dm-spy capture (2018 nightly Debug tab; same workflow as the MPU capture) → unlocks dual_iso/mlv_rec/crop_rec/silent/raw histogram; (4) MLU + misc feature verification.
+
+## AUDIO CODEC IDENTIFIED (2026-11-02 night): 1200D = LAPIS (600D family), NOT AK
+- Fork default ML_AUDIO_OBJ=audio-ak.o is WRONG for this camera. ROM proves Lapis:
+  init table @0xFF6A1528+ (cells walked by 0xFF2AD25C=_audio_ic_write stub, ptr-arg list-walker) writes regs
+  03(=0x96) 05 07 09 0B(=5) = Lapis PLL block (ML_PLLNL/NH/ML/MH/DIV), 0D←1→3 = ML_CLK_EN ramp,
+  0F←8 = ML_CLK_CTL, 21←1→2 = ML_PW_REF_PW_MNG HISPEED→NORMAL ramp (textbook 600D Lapis power-up,
+  src/audio.h 158-280). AK chips have no such map. Our chip is a slightly different Lapis revision
+  (writes 0x1D, 0xED; 600D map has 0xE3 boost2) — final reg map via hw dump.
+- Firmware audio-IC layer (SoundDevice_CODEC.c / AudioIC.c): SendDataForAudioIC @ **0xFF11C304**
+  (r0 = ptr to {u16 reg, u16 data} struct — ldrh [r0], ldrh [r0+4], DebugMsg "RegNum(0x%02X) Data(0x%02X)");
+  list-walker @ 0xFF2AD25C; read stub 0xFF2AD554; **DumpAudioIcRegister ≈ 0xFF11C600-0xFF11C660** (string ref @0xFF11C638) — firmware's own reg dumper!
+  Strings: InitializeAudioIC/DisableAudioIC/TestSetAudioMic. No chip-name string in ROM.
+- IMPLEMENTATION PLAN (next audio session): (1) ML_AUDIO_OBJ=audio-lapis.o in platform Makefile;
+  (2) _audio_ic_write/read: ML's lapis driver passes cmd16 (reg<<8|val) — write C shims in platform
+  code building the {reg,data} struct → SendDataForAudioIC(0xFF11C304); read path via 0xFF2AD554 family;
+  (3) enable CONFIG_AUDIO_CONTROLS + reg-dump; (4) flash → call/inspect DumpAudioIcRegister output vs
+  Lapis datasheet → fix 0x1D/0xED-class map diffs; (5) meters/gain/AGC-off then headroom-test.
+  ASIF+sounddev stubs all present (mk11174). mlv_snd audio-side imports already resolve (mlv_rec deps pending RAW).
+
+## MODULE LOAD RESULTS (first hw test with 23 modules, 2026-11-02 night)
+- Failing on camera with "undefined symbol": adv_int bench file_man mlv_play mlv_rec mlv_snd (+ per earlier offline analysis: dot_tune edmac ettr raw_vidx selftest silent yolo would also fail).
+- EXPLAINED (dep analysis, ~/scripts/ml_module_syms.py + per-.dep check):
+  * mlv_lite/mlv_rec/silent/selftest/raw_vidx/ettr/edmac: import EDMAC (edmac_read/write_chan, edmac_memcpy_*, copy_rectangle_*) + SRM suite (srm_malloc/free_suite) + raw-LV (raw_lv_redirect_edmac, raw_lv_request_bpp...) — all in core only with CONFIG_EDMAC_MEMCPY/RAW/SRM enabled = the RAW-pipeline frontier. CASCADES: mlv_play←mlv_lite (lossless_decompress_raw), mlv_snd←mlv_rec.
+  * dot_tune: get/set_afma family (AF micro-adjust stubs — separate small RE).
+  * yolo: socket_*/wlan — WiFi cams only, never on T5.
+  * raw_vidx also wants take_semaphore_now (known stub gap).
+- UNEXPLAINED: adv_int bench file_man fail on camera but have ZERO unsatisfied deps vs t5_102.sym (both nm and .dep level). NEXT: read the exact symbol name from the camera's error popup (TCC prints it) — that closes model-vs-reality. Suspect: TCC parse subtlety (sym format/underscore names) or stale .mo vs 13:26 relink.
+- Cleanup for next flash: populate modules.included with the SATISFIED set (arkanoid autoexpo crop_rec? deflick img_name lua pic_view sd_clock + whatever proves out) so zips self-filter; card currently carries all 23 with expected-fail noise.
+
+## HOST TCC REPLICATION (2026-11-02 night): exact offline module-load validation
+- Tool: ~/scripts/ml_host_tcc.c + ~/scripts/tcchost-ml/ (copy of tcc/ with: config.h = TCC_VERSION only; tccrun.c rt_get_caller_pc ucontext sections stubbed for arm-target-on-x86). Build:
+  gcc -m32 -I~/scripts/tcchost-ml -DTCC_TARGET_ARM -DTCC_ARM_EABI -DTCC_ARM_VFP -DTCC_IS_NATIVE -DTCC_ARM_VERSION=5 -DWITHOUT_LIBTCC -DCONFIG_TCC_LIBPATHS='""' -DCONFIG_TCC_CRTPREFIX='""' -DCONFIG_TCCDIR='""' -DONE_SOURCE -fcommon -w ml_host_tcc.c ~/scripts/tcchost-ml/libtcc.c -lm -o ml_host_tcc32
+  (-m32 REQUIRED: ML tcc stores pointers in 32-bit addr_t — 64-bit host segfaults in tcc_relocate_ex memcpy; PATH=/usr/bin first — theos tools break gcc; WITHOUT_LIBTCC = camera parity per tcc/Makefile arm defines; empty LIBPATHS/CRTPREFIX/TCCDIR kills host libc noise)
+- VERDICT per module (authoritative — same tcc code as camera): LOADABLE: adv_int arkanoid autoexpo bench dual_iso file_man img_name lua sd_clock. BLOCKED (first missing symbol): crop_rec=raw_lv_is_enabled, deflick=raw_hist_get_percentile_level, dot_tune=get_afma, edmac=edmac_write_chan, ettr=raw_hist_get_percentile_levels, mlv_lite/rec/raw_vidx/silent=raw_lv_redirect_edmac, mlv_play/pic_view=lossless_decompress_raw, mlv_snd=mlv_rec_get_free_slot (cross-module), selftest=edmac_write_chan, yolo=nif_setup.
+- DISCREPANCY OPEN: camera showed adv_int/bench/file_man as failed ("undefined symbol"-ish) but host tcc links them clean. Suspects: runtime malloc state at load time, first-boot .en/settings remnants, or report paraphrase. Card restaged with ONLY the 9 verified modules (all-23 kept in ML/modules-attempt1-all23/); modules.included now self-filters future zips. RETEST: if those 3 still fail on camera while others load → instrument (log module load results to card) or UART console.
+
+## MODULES WORKING (2026-11-02, retest): discrepancy CLOSED
+- Clean card (9 verified modules only): adv_int bench file_man LOAD — host tcc replication was right; first-boot failures were batch-load context (14 unresolvable modules in the same loader pass perturbing the three). 9/9 modules live on hw: adv_int arkanoid autoexpo bench dual_iso file_man img_name lua sd_clock.
+- Module system: DONE for the loadable set. modules.included (uncommitted) self-filters zips. Remaining blocked modules = RAW/EDMAC/SRM/AFMA frontier as documented.
+
+## AUDIO CONTROLS IMPLEMENTED (2026-11-02 night, pending hw validation)
+- Changes: platform Makefile ML_AUDIO_OBJ=audio-lapis.o; internals.h CONFIG_AUDIO_CONTROLS on;
+  audio.h Lapis map guard widened to (600D||1200D); audio-common.c draw_meters Lapis branch +
+  mono-mic (1200D in 500D/1100D mono exclusion); audio-lapis.c: 1200D _audio_ic_write shim
+  (cmd16 -> {u16 reg,pad,u16 data} -> SendDataForAudioIC 0xFF11C304, long_call), fwd decls,
+  FEATURE_HEADPHONE_MONITORING guards, 3x _600D PROP_HANDLERs #ifndef CONFIG_1200D (prop IDs
+  not RE'd — auto-reassert after Canon-menu volume changes lost, cosmetic); stubs.S: removed
+  _audio_ic_write NSTUB (0xFF2AD25C = list-walker, incompatible convention), _audio_ic_read
+  kept (0xFF2AD554, signature compatible); features.h: restored clobbered port block (lesson!)
+  + #undef FEATURE_HEADPHONE_MONITORING/OUTPUT_VOLUME (HOTPLUG_VIDEO_OUT_STATUS_ADDR unknown —
+  RE it to re-enable; 600D=0x1ac4).
+- SAFE DEFAULT: audio override OFF (cfg_override_audio=0) — driver dormant until enabled from
+  the Audio menu; no SIO writes at boot. Metering reads hw level reg 0xC0920110 (D4 standard).
+- NOTE: _bss_end now 0xCFEC00 — AM window margin down to ~5KB (audio code ate 6KB). Further
+  feature growth → either slim or switch to a bigger reserve (6D/70D-style R0 bottom patch).
+- Build: 446,144B, md5 5bef113836492bf5f9c500ca72496fb8, QEMU-boots. Artifact autoexec.audio-lapis.bin.
+- HW TEST: Audio tab (override, input source, gains, AGC, filters, meters) in movie mode.
+  If settings misbehave → chip-revision reg-map diff from 600D (ROM hints 0x1D, 0xED) → next
+  step: reg-dump build or firmware's DumpAudioIcRegister (0xFF11C6xx). Uncommitted until hw-validated.
+
+## AUDIO v2 (2026-11-02 late): input-only output policy — fixes camera playback silence
+- HW findings (v1 test): Audio tab OK; recording with ML gain control WORKS (computer playback
+  confirmed); camera's own clip playback SILENT with Override on. Root cause: 600D's
+  set_lineout_onoff else-branch (no monitoring) powers off DAC + HP amp + SPEAKER AMP — 600D
+  assumes A/V monitoring; T5 has none → playback killed. Meters idle in LV is NORMAL on this
+  body (level regs only update while audio runs; 2018 help text "while recording only";
+  same 0xC0920110 addr as 2018 — ROM-scan found only base literal, code uses base+imm).
+- v2 (md5 190a0395c0877549f9a3150b91dc7f47, 446016B, _bss_end 0xCFEB00, QEMU OK):
+  1200D = INPUT-ONLY policy: set_lineout_onoff no-op, set_lineout_vol no-op, mute_on HP-write
+  guarded out, audio_ic_off leaves REF power at NORMAL(0x02) not ALL_OFF. All output/DAC/
+  speaker/headphone state = Canon's business. Artifact autoexec.audio-v2.bin (v1 kept).
+- HW TEST v2: Override on → record (gain control should still work, computer check) → camera
+  playback should now have sound. If camera playback STILL silent even with Override OFF after
+  a reboot → audio_ic_off's remaining writes too aggressive for our chip rev → strip further.
+
+## MEMORY WINDOW EXPANDED (2026-11-02 v3, combined with audio-v2): 5K -> 596K free
+- Switched to the BOTTOM-RESERVE AM variant (6D/70D/100D pattern): boot-d45-am now patches the
+  pool START (r0 @0xFF0C2434) 0x3D0000 -> 0x4E0000 (MOV_R0_0x4E0000_INSTR; 1200D added to that
+  #if branch), end stays 0xD00000. ML window = [0x3D0000, 0x4E0000) = 1.1MB; Canon AM pool =
+  [0x4E0000, 0xD00000) = 8.3MB; malloc pool untouched. RESTARTSTART = 0x003D0000.
+- Verified: .text @ 0x3D0000, _bss_end 0x44EA00 => 596KB free headroom (was 5K). QEMU boots
+  (AM sanity checks + patched CreateTaskMain ran). Artifact autoexec.audio-v3-1mb.bin
+  (md5 6c762ce7ec645359b0e986c0bf6130fa). Card staged: v3 core + fresh sym + 9 modules.
+- This build carries BOTH: input-only audio policy (camera playback fix) + 1.1MB window.
+  HW test: boot (9 modules load), camera clip playback with Override ON, gain control on a
+  recording. RAW feature code now has room to land.
+- NOTE: previous artifacts (am-boot/am-clean/audio-lapis/audio-v2) all assume 0xC80100 — flash
+  only v3+ going forward; the .bak 2018 restore is unaffected.
+
+## AUDIO v4 DIAGNOSTIC (2026-11-02 late): A/B verdict + write-test build
+- A/B clips (MVI_2214/2215, v3 build): mean -26.6 vs -25.9 dB — override writes have NO effect
+  on recorded level. Camera boots/records fine on v3; playback fix untested verbally but v3 on.
+- v4 (md5 487d1fcee56b7cd27c74fa31ad7b9c66, 446560B, _bss_end 0x44ED00, QEMU OK) ships:
+  (1) "Codec reg dump (1200D)" Audio-menu action: write-test (r33←0x18, read back) + 18 Lapis
+      regs drawn on screen 10s;
+  (2) audio_reassert task: while Override on + movie mode, re-applies gain/boost/AGC/recdgain
+      every 500ms (Canon re-inits codec at recording start — the 600D re-asserts via prop
+      handlers we lack; poll instead).
+- HW TEST v4: (a) A/B pair again — if levels now differ, the re-assert fixed it (timing was the
+  killer); (b) if still identical, run "Codec reg dump" — wr-test readback 0x18 = transport OK
+  (map/timing issue), 0xFF/garbage = transport broken (shim or SIO state) — and transcribe the
+  18 reg values (photo of screen fine).
+
+## AUDIO VALIDATED ON HW (2026-11-02 end of day): ML AUDIO CONTROL WORKS
+- v4 A/B: MVI_2216 (override off) mean -32.9 dB vs MVI_2217 (override on, gain up) -17.6 dB
+  = 15.3 dB swing. ROOT CAUSE of the earlier no-op CONFIRMED: Canon re-inits the codec at
+  recording start; the audio_reassert poll task (Override on + movie mode, re-apply every 500ms)
+  beats it. Transport shim + 600D Lapis map + level-regs all correct.
+- Status: audio DONE (pending: camera-speaker playback confirm on v3/v4 — user hasn't reported;
+  prop-handler RE optional polish; reg-dump menu entry stays as dev tool).
+- Frontier next: RAW expedition (memory window already expanded to 1.1MB in v3).
+
+## RAW PIPELINE PHASE A COMPILES (2026-11-02 night): raw LV + 20 modules
+- Enabled: CONFIG_RAW_LIVEVIEW + CONFIG_EDMAC_RAW_SLURP (600D path: dynamic LV EDMAC redirect,
+  no hardcoded channel addr) + CONFIG_EDMAC_MEMCPY + SRM (stubbed 0xFF0D9B14/0xFF0DC3A8 by mk11174,
+  SRM_BUFFER_SIZE=0x1F68000 600D-guess — print real from srm_malloc_cbr) + FEATURE_RAW_HISTOGRAM.
+- RAW_PHOTO stays OFF until DEFAULT_RAW_BUFFER chain RE'd (600D: MEM(MEM(0x51FC)); raw.c:145 has
+  the CCDWriteEDmacCompleteCBR RE recipe). Placeholder null/0 makes "reuse default buffer" dead.
+- EDMAC memcpy channels (edmac-memcpy.c): read 0x19 (D4-universal), write 0x04 (1100D guess,
+  600D uses 0x06) — VERIFY on hw via edmac.mo during LV; wrong write-chan = artifacts/crash.
+- Removed cfn.c raw_histo_update no-op shim (real one in histogram.c now).
+- Modules: 20 in modules.included (17 core-resolvable + mlv_play/pic_view via mlv_lite,
+  mlv_snd via mlv_rec). Blocked: dot_tune (AFMA), raw_vidx (take_semaphore_now), yolo (wifi).
+- Artifact autoexec.raw-lv-phaseA.bin md5 4204f36d1316ebdc4a541b5d4bc38b75, 462752B, _bss_end
+  0x452D00 (590K window margin), QEMU-boots. UNCOMMITTED.
+- HW TEST: boot (20 modules), LV overlays (histogram/zebra/raw data), mlv_lite raw video record
+  (start 1280ish, few seconds), edmac.mo channel check. Risks: write-chan guess, colormatrix
+  placeholders (600D values per port notes) — colors in metadata may be off, frames still valid.
+
+## RAW VIDEO ON HW (2026-11-02, ~23:xx): THE 1200D RECORDS RAW — MOUNTAIN CLIMBED
+- mlv_lite recorded 2 takes (156MB + 150MB, 53+ VDF frames first take): valid MLV with MLVI/RAWI/
+  RAWC (LOSSLESS-COMPRESSED raw!)/IDNT/EXPO/LENS/WBAL/STYL/WAVI/RTCI. Frame data verified REAL
+  sensor output (full 0-255 range, 256 unique byte vals, natural histogram). No crash, no tearing
+  => edmac_write_chan=0x04 guess CORRECT (or at least functional for LV+record).
+- Evidence preserved: ~/mlv-1200d/first-raw-video.MLV
+- Status: RAW_LIVEVIEW pipeline hw-validated end to end. Remaining polish: RAW_PHOTO (needs
+  DEFAULT_RAW_BUFFER chain RE), color-matrix verification (metadata colors may be off), srM size
+  print, dot_tune/raw_vidx/yolo modules, take_semaphore_now + get_task_info_by_id stubs.
+- Phase A uncommitted (raw pipeline + 20-module set).
+
+## RAW PHOTO ENABLED (phase B, 2026-11-02 23:06) — pending hw validation
+- CONFIG_RAW_PHOTO on; RAW_PHOTO_EDMAC 0xc0f04208 added to the D4-universal guard in raw.c
+  (every DIGIC 4 in the fork uses it). No CCDWriteEDmacCompleteCBR string in 1.0.2 ROM to
+  cross-check the channel, but the reader is defensive: null-buffer + 10-30MP size checks →
+  features decline cleanly if the register were wrong. DEFAULT_RAW_BUFFER stays null (only
+  feeds the LV reuse-optimization). Build 2b4b2a2f..., 466688B, _bss_end 0x453C00, QEMU OK.
+- HW TEST: Canon menu → image quality RAW → photo mode → take a picture → during image review,
+  ML histogram/overlays should run on the actual raw data. dual_iso becomes fully usable.
