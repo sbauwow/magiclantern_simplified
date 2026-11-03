@@ -2006,11 +2006,11 @@ static unsigned int crop_rec_init()
     else if (is_camera("6D", "1.1.6"))
     {
         CMOS_WRITE = 0x2420C;
-        MEM_CMOS_WRITE = 0xE92D41F0;        
-        
+        MEM_CMOS_WRITE = 0xE92D41F0;
+
         ADTG_WRITE = 0x24108;
         MEM_ADTG_WRITE = 0xE92D41F0;
-        
+
         is_6D = 1;
         is_basic = 1;
         crop_presets                = crop_presets_basic;
@@ -2018,7 +2018,37 @@ static unsigned int crop_rec_init()
         crop_rec_menu[0].max        = COUNT(crop_choices_basic) - 1;
         crop_rec_menu[0].help       = crop_choices_help_basic;
         crop_rec_menu[0].help2      = crop_choices_help2_basic;
-    }      
+    }
+    else if (is_camera("1200D", "1.0.2"))
+    {
+        /* Hook addresses statically RE'd from 1.0.2 ROM (Device\SIO\Sio0Driver.c
+           cluster, string-xref verified — see modules/crop_rec/1200D_reg_corpus.txt):
+             ADTG writer 0xFF3A246C: push {r4-r10,lr} (0xE92D47F0), walks uint32
+               lists (0xFFFFFFFF terminated), 4 chip-select stores, debug-prints
+               "[REG] ADTG:[0x%08x]".
+             CMOS writer 0xFF3A265C: push {r4-r8,lr} (0xE92D41F0), walks uint16
+               (reg<<12)|val lists (0xFFFF terminated), ENGIO preamble + LED strobe.
+           ENGIO (video timers) writer not yet located — left 0, hooks off.
+           STATUS 2026-11-03: plumbing only. check_cmos_vidmode magic below is
+           D5-era, so on this body cmos_vidmode_ok never asserts -> overrides
+           stay inert (safe). Enabling real presets requires: (1) hw reg dump
+           via Debug->ADTG/CMOS log across LV modes, (2) fill check_cmos_vidmode
+           with 1200D per-mode CMOS1/2/6 signatures, (3) preset values from the
+           corpus (BASE-A/B twins + VAR-1..6; ADTG 0x8826 0x2404-vs-0x0C00 is
+           the prime binned-vs-1:1 readout candidate). */
+        CMOS_WRITE = 0xFF3A265C;
+        MEM_CMOS_WRITE = 0xE92D41F0;
+
+        ADTG_WRITE = 0xFF3A246C;
+        MEM_ADTG_WRITE = 0xE92D47F0;
+
+        is_basic = 1;
+        crop_presets                = crop_presets_basic;
+        crop_rec_menu[0].choices    = crop_choices_basic;
+        crop_rec_menu[0].max        = COUNT(crop_choices_basic) - 1;
+        crop_rec_menu[0].help       = crop_choices_help_basic;
+        crop_rec_menu[0].help2      = crop_choices_help2_basic;
+    } 
     menu_add("Movie", crop_rec_menu, COUNT(crop_rec_menu));
     lvinfo_add_items (info_items, COUNT(info_items));
 
