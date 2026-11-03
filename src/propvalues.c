@@ -53,8 +53,22 @@ int get_digic_version(void)
 
 PROP_HANDLER(PROP_CAM_MODEL)
 {
-    memcpy((char *)&camera_model_id, (void*)buf + 32, 4);
     snprintf(camera_model, sizeof(camera_model), (const char *)buf);
+    camera_model_id = 0;
+    if(len >= 36)
+    {
+        memcpy((char *)&camera_model_id, (void*)buf + 32, 4);
+    }
+#ifdef CONFIG_1200D
+    /* T5 1.0.2 delivers PROP_CAM_MODEL with the name string only - the dword at
+       +32 is zero, so MLV IDNT blocks get cameraModel 0 and mlv_dump's
+       camera_id[] lookup misses (CDNGs silently lose ColorMatrix2/forward
+       matrices). Fall back to the ROM/FIR model id (CCF15102.FIR: 0x80000327). */
+    if(camera_model_id == 0)
+    {
+        camera_model_id = MODEL_EOS_1200D;
+    }
+#endif
 }
 
 PROP_HANDLER(PROP_BODY_ID)

@@ -519,6 +519,13 @@ static void dng_fill_header(struct frame_info * frame_info, struct dng_data * dn
         /* Get camera_id[] array element number for current camera */
         int current_cam = camera_id_get_current_cam(frame_info->idnt_hdr.cameraModel);
 
+        /* IDNT cameraModel == 0 (camera never filled it): fall back to name lookup,
+           so older MLVs still get ColorMatrix2/forward matrices from the database */
+        if(camera_id[current_cam].cameraModel == 0)
+        {
+            current_cam = camera_id_get_current_cam_by_name(frame_info->idnt_hdr.cameraName);
+        }
+
         /* 'Unique Camera Model' Tag */
         char unique_model[33];
         if (camera_id[current_cam].cameraModel)

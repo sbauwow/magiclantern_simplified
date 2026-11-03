@@ -284,7 +284,9 @@ static int get_default_white_level()
 #endif
 
 #ifdef CONFIG_1200D
-    /* DCRAW: 1200D = 600D 18MP sensor family matrix; raw disabled anyway */
+    /* DCRAW "Canon EOS 1200D" (model 0x37c2): { 6461,-907,-882,-4300,12184,2378,-819,1944,5931 }
+       - byte-identical to the 600D entry (same 18MP sensor, Adobe profiled both the same).
+       VERIFIED against dcraw 9.31 + mlv_dump dng/camera_id.h 1200D ColorMatrix2 (both match). */
     #define CAM_COLORMATRIX1                        \
       6461, 10000,     -907, 10000,    -882, 10000,\
      -4300, 10000,     12184, 10000,    2378, 10000, \

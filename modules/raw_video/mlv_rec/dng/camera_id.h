@@ -359,4 +359,31 @@ static int camera_id_get_current_cam(unsigned long model_id)
 	return i;
 };
 
+/* Fallback lookup by IDNT cameraName (case-insensitive) for MLVs whose camera
+   did not populate idnt.cameraModel (e.g. 1200D 1.0.2 ships the name string
+   with a zero dword at +32, so cameraModel == 0 and the ID lookup misses).
+   Matches any of the three localized names. Returns the terminator index on
+   no match, same convention as camera_id_get_current_cam. */
+static int camera_id_get_current_cam_by_name(char *camera_name)
+{
+	if(camera_name == NULL || camera_name[0] == '\0')
+	{
+		return camera_id_get_current_cam(0);
+	}
+	int i = 0;
+	while (camera_id[i].cameraModel)
+	{
+		for(int n = 0; n < 3; n++)
+		{
+			const char *known = camera_id[i].cameraName[n];
+			if(known && strncasecmp(camera_name, known, 32) == 0)
+			{
+				return i;
+			}
+		}
+		i++;
+	}
+	return i;
+};
+
 #endif
