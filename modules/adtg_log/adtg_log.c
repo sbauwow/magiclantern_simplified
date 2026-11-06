@@ -1,24 +1,31 @@
 /**
  * 1200D (T5) CMOS/ADTG register logger — crop_rec ground-truth instrument.
- * Port of the 2018-tree adtg_log (5D3) to 1200D 1.0.2.
  *
- * Addresses statically derived from ROM (Device\SIO\Sio0Driver.c cluster):
- *   ADTG_WRITE_FUNC = 0xFF3A246C  push {r4-sl,lr}; walks uint32 list
- *       (terminator 0xFFFFFFFF), 4 chip-select stores ([drv+24/28/32/36]),
- *       prints "[REG] ADTG:[0x%08x]".
- *   CMOS_WRITE_FUNC = 0xFF3A265C  push {r4-r8,lr}; walks uint16 list
- *       ((reg<<12)|val), ENGIO preamble + LED strobe, prints
- *       "[REG] CMOS:[0x%04x]". (No separate 5D3-style CMOS16 fn found.)
+ * v8 (2026-11-06 night): capture via patch_hook_function (fork-native,
+ * single-point cache patch, production mechanism) — the gdb watchpoint
+ * pair (v3-v7) wedged the camera to a black screen on the first real mode
+ * transition (re-arm race under burst traffic; 720p switch, LED off,
+ * logger-off 720p switch works fine).
  *
- * Debug menu -> "ADTG/CMOS log (1200D)": hardware watchpoints on both
- * writers, live CMOS values on screen, full dump to DCIM/adtg.bin when
- * the buffer fills. Toggle LV modes (1080p/720p/zoom x5/x10) while running.
- * Watchpoints only — if CMOS regs don't animate in LV, addresses are wrong
- * and nothing else was touched.
+ * Writers (ROM-verified 1.0.2, Device\SIO\Sio0Driver.c cluster):
+ *   ADTG_WRITE_FUNC = 0xFF3A246C  r0 = chip-select mask (bits 0-4),
+ *       r1 = u32 list ptr, 0xFFFFFFFF terminator (ldr r0,[r6] @0xFF3A2514,
+ *       add r6,#4, cmn r0,#1). Word = (reg<<16)|val; families <0x1000 and
+ *       0x8000-0x8FFF.
+ *   CMOS_WRITE_FUNC = 0xFF3A265C  r0 = u16 list ptr, 0xFFFF terminator
+ *       (ldrh walk). Word = (reg<<12)|val, regs 0-7.
+ *
+ * Raw logging (no on-camera dedup — replay jitter analysis moved offline):
+ * markers 0xFFFFFFFF/0x00FF0000/0xFFFF0000 as before. Buffer 128K entries;
+ * on overflow the hook drops and flags; the task writes part files
+ * DCIM/100CANON/adtg_pNNN.bin and continues — capture length unbounded.
+ * Second select stops + saves; 30 s writer silence stops + saves.
  */
 
 #define ADTG_WRITE_FUNC   0xFF3A246C
+#define ADTG_WRITE_INSTR  0xE92D47F0   /* push {r4-r9,lr} — sanity check */
 #define CMOS_WRITE_FUNC   0xFF3A265C
+#define CMOS_WRITE_INSTR  0xE92D41F0   /* push {r4-r7,lr} */
 
 #include <module.h>
 #include <dryos.h>
@@ -27,7 +34,7 @@
 #include <menu.h>
 #include <config.h>
 #include <beep.h>
-#include <gdb.h>
+#include <patch.h>
 
 unsigned int *adtg_buf = NULL;
 unsigned int adtg_buf_pos = 0;
@@ -35,26 +42,9 @@ unsigned int adtg_buf_pos_max = 0;
 
 static volatile uint32_t adtg_running = 0;
 static volatile uint32_t adtg_stop = 0;
-
-/* change-only logging with jitter threshold: adjacent LV replays differ by
- * 2-6 regs (measured run3: median 4, max 6) — flap regs 0x1D4/0x4F00/0x174...
- * A real mode/state change rewrites 100+ regs (measured: 202). Threshold 8
- * sits between. Exact-match dedup (v4) never triggered because of jitter. */
-static unsigned short adtg_prev_val[8192];
-static unsigned char adtg_prev_present[8192];
-static unsigned int adtg_logged = 0;
-static volatile unsigned int adtg_last_activity = 0;
-
-/* corpus reg families: <0x1000 and 0x8000-0x8FFF (e.g. 0x8826). Map both
- * into one 8K table; collisions between X and 0x8000+X only ever cause
- * extra logging, never dropped data. */
-static unsigned int adtg_reg_idx(unsigned int r)
-{
-    return (r < 0x1000) ? r : (0x1000 + (r & 0xFFF));
-}
-
-static unsigned int cmos_last[16];
-static unsigned int cmos_last_len = 0;
+static volatile uint32_t adtg_overflow = 0;
+static volatile uint32_t adtg_last_activity = 0;
+static unsigned int adtg_part = 0;
 
 unsigned short cmos_regs[8];
 
@@ -65,26 +55,21 @@ static void cmos_reg_update(unsigned short cmos_data)
     cmos_regs[reg] = data;
 }
 
-static void adtg_log(breakpoint_t *bkpt)
+/* hook context: regs[0..3] = r0..r3, pc = hook address */
+static void adtg_hook(uint32_t *regs, uint32_t *stack, uint32_t pc)
 {
-    uint32_t *regs = bkpt->ctx;   /* r0..r15, cpsr */
+    (void)stack; (void)pc;
+    if(!adtg_buf) return;
 
-    if(!adtg_buf)
+    uint32_t* data_buf = (uint32_t*) regs[1];   /* list ptr (r1) */
+    adtg_last_activity = get_ms_clock();
+
+    if(adtg_buf_pos + 4 >= adtg_buf_pos_max)
     {
+        adtg_overflow = 1;
         return;
     }
 
-    /* r0-at-entry = chip-select mask (bits 0-4, tst r4,#1/2/4/8/16),
-     * r1-at-entry = POINTER to u32 word list, 0xFFFFFFFF terminator
-     * (ROM: ldr r0,[r6] @0xFF3A2514, add r6,#4 @0xFF3A259C, cmn r0,#1
-     * @0xFF3A25A4). Walking r0 was the run2-4 bug: mask (e.g. 0x1F) used
-     * as a pointer -> read a low-address code mirror -> 982 words of
-     * halfword-swapped ARM instructions as "register data". */
-    uint32_t* data_buf = (uint32_t*) regs[1];
-
-    if(adtg_buf_pos + 4 >= adtg_buf_pos_max) return;
-
-    unsigned int start = adtg_buf_pos;
     adtg_buf[adtg_buf_pos++] = 0xFFFFFFFF;
 
     while(*data_buf != 0xFFFFFFFF && adtg_buf_pos + 2 < adtg_buf_pos_max)
@@ -94,49 +79,26 @@ static void adtg_log(breakpoint_t *bkpt)
 
     adtg_buf[adtg_buf_pos++] = 0xFFFFFFFF;
 
-    /* jitter-threshold dedup: count regs whose value changed vs previous
-     * table; <= 8 = replay jitter -> drop, > 8 = real change -> keep */
-    unsigned int changed = 0;
-    for(unsigned int p = start + 1; p < adtg_buf_pos - 1; p++)
+    if(adtg_buf_pos + 4 >= adtg_buf_pos_max)
     {
-        unsigned int r = adtg_reg_idx(adtg_buf[p] >> 16);
-        if(!adtg_prev_present[r] || adtg_prev_val[r] != (adtg_buf[p] & 0xFFFF))
-        {
-            changed++;
-        }
+        adtg_overflow = 1;
     }
-
-    if(changed <= 8)
-    {
-        adtg_buf_pos = start;
-    }
-    else
-    {
-        for(unsigned int p = start + 1; p < adtg_buf_pos - 1; p++)
-        {
-            unsigned int r = adtg_reg_idx(adtg_buf[p] >> 16);
-            adtg_prev_val[r] = adtg_buf[p] & 0xFFFF;
-            adtg_prev_present[r] = 1;
-        }
-        adtg_logged++;
-    }
-    adtg_last_activity = get_ms_clock();
 }
 
-static void cmos_log(breakpoint_t *bkpt)
+static void cmos_hook(uint32_t *regs, uint32_t *stack, uint32_t pc)
 {
-    uint32_t *regs = bkpt->ctx;   /* r0..r15, cpsr */
+    (void)stack; (void)pc;
+    if(!adtg_buf) return;
 
-    if(!adtg_buf)
+    unsigned short* data_buf = (unsigned short*) regs[0];  /* list ptr (r0) */
+    adtg_last_activity = get_ms_clock();
+
+    if(adtg_buf_pos + 4 >= adtg_buf_pos_max)
     {
+        adtg_overflow = 1;
         return;
     }
 
-    unsigned short* data_buf = (unsigned short*) regs[0];
-
-    if(adtg_buf_pos + 4 >= adtg_buf_pos_max) return;
-
-    unsigned int start = adtg_buf_pos;
     adtg_buf[adtg_buf_pos++] = 0x00FF0000;
 
     while(*data_buf != 0xFFFF && adtg_buf_pos + 2 < adtg_buf_pos_max)
@@ -147,30 +109,23 @@ static void cmos_log(breakpoint_t *bkpt)
 
     adtg_buf[adtg_buf_pos++] = 0xFFFF0000;
 
-    /* change-only: drop burst if identical to the last logged one */
-    unsigned int n = adtg_buf_pos - start - 2;
-    unsigned int same = (n == cmos_last_len && n <= 16);
-    if(same)
+    if(adtg_buf_pos + 4 >= adtg_buf_pos_max)
     {
-        for(unsigned int i = 0; i < n; i++)
-        {
-            if(adtg_buf[start + 1 + i] != cmos_last[i]) { same = 0; break; }
-        }
+        adtg_overflow = 1;
     }
-    if(same)
+}
+
+static void adtg_write_part(void)
+{
+    char filename[100];
+    snprintf(filename, sizeof(filename), "%s/adtg_p%03d.bin", get_dcim_dir(), ++adtg_part);
+    FILE* f = FIO_CreateFile(filename);
+    if(f)
     {
-        adtg_buf_pos = start;
+        FIO_WriteFile(f, adtg_buf, adtg_buf_pos * 4);
+        FIO_CloseFile(f);
     }
-    else
-    {
-        if(n <= 16)
-        {
-            for(unsigned int i = 0; i < n; i++) cmos_last[i] = adtg_buf[start + 1 + i];
-            cmos_last_len = n;
-        }
-        adtg_logged++;
-    }
-    adtg_last_activity = get_ms_clock();
+    adtg_buf_pos = 0;
 }
 
 static void adtg_log_task(void *unused, int unused2)
@@ -181,10 +136,8 @@ static void adtg_log_task(void *unused, int unused2)
     }
     adtg_running = 1;
     adtg_stop = 0;
-    cmos_last_len = 0;
-    adtg_logged = 0;
-    for(unsigned int i = 0; i < 8192; i++) adtg_prev_present[i] = 0;
-    adtg_last_activity = get_ms_clock();
+    adtg_overflow = 0;
+    adtg_part = 0;
 
     adtg_buf_pos_max = 128 * 1024;
 
@@ -197,36 +150,38 @@ static void adtg_log_task(void *unused, int unused2)
         return;
     }
 
-    /* initialize gdb engine first — without gdb_setup() gdb_installed stays 0
-     * and every gdb_add_watchpoint returns NULL ("watchpoint setup failed",
-     * live cmos stays 0 — callbacks never fire). 2018 adtg_log.c:195 parity. */
-    if(!gdb_setup())
+    adtg_last_activity = get_ms_clock();
+
+    /* hook the two writers via the fork-native patch system */
+    int h1 = patch_hook_function(ADTG_WRITE_FUNC, ADTG_WRITE_INSTR, adtg_hook, "adtg_log");
+    int h2 = patch_hook_function(CMOS_WRITE_FUNC, CMOS_WRITE_INSTR, cmos_hook, "adtg_cmos");
+    if(h1 != E_PATCH_OK || h2 != E_PATCH_OK)
     {
-        NotifyBox(2000, "gdb setup failed");
+        NotifyBox(2000, "hook setup failed (%d,%d)", h1, h2);
+        if(h1 == E_PATCH_OK) unpatch_memory(ADTG_WRITE_FUNC);
+        if(h2 == E_PATCH_OK) unpatch_memory(CMOS_WRITE_FUNC);
         free(adtg_buf);
         adtg_buf = NULL;
         adtg_running = 0;
         return;
     }
 
-    /* set watchpoints at ADTG and CMOS writes */
-    breakpoint_t *bkpt1 = gdb_add_watchpoint(ADTG_WRITE_FUNC, 0, adtg_log);
-    breakpoint_t *bkpt2 = gdb_add_watchpoint(CMOS_WRITE_FUNC, 0, cmos_log);
-    if(!bkpt1 || !bkpt2)
-    {
-        NotifyBox(2000, "watchpoint setup failed");
-    }
-
-    /* wait for real changes; exit paths: buffer full, second select
-     * (adtg_stop), or 30 s with no writer activity at all */
-    while(adtg_buf_pos + 2 < adtg_buf_pos_max && !adtg_stop)
+    /* run until: manual stop, or 30 s of writer silence */
+    while(!adtg_stop)
     {
         uint32_t fill_pct = adtg_buf_pos_max ? (adtg_buf_pos * 100 / adtg_buf_pos_max) : 0;
-        bmp_printf(FONT_MED, 10, 20, "cmos: new=%u buf %3u%% SET=stop", adtg_logged, fill_pct);
+        bmp_printf(FONT_MED, 10, 20, "cmos: p%u buf %3u%% SET=stop", adtg_part + 1, fill_pct);
         for(int pos = 0; pos < 8; pos++)
         {
             bmp_printf(FONT_MED, 10, 40 + pos * font_med.height, "[%d] 0x%03X ", pos, cmos_regs[pos]);
         }
+
+        if(adtg_overflow)
+        {
+            adtg_overflow = 0;
+            adtg_write_part();
+        }
+
         if(get_ms_clock() - adtg_last_activity > 30000)
         {
             break;
@@ -236,16 +191,15 @@ static void adtg_log_task(void *unused, int unused2)
 
     beep();
 
-    /* uninstall watchpoints */
-    gdb_delete_bkpt(bkpt1);
-    gdb_delete_bkpt(bkpt2);
+    /* remove hooks BEFORE writing the final part */
+    unpatch_memory(ADTG_WRITE_FUNC);
+    unpatch_memory(CMOS_WRITE_FUNC);
+    msleep(50);
 
-    /* dump all stuff */
-    char filename[100];
-    snprintf(filename, sizeof(filename), "%s/adtg.bin", get_dcim_dir());
-    FILE* f = FIO_CreateFile(filename);
-    FIO_WriteFile(f, adtg_buf, adtg_buf_pos * 4);
-    FIO_CloseFile(f);
+    if(adtg_buf_pos)
+    {
+        adtg_write_part();
+    }
 
     /* free buffer */
     void *buf = adtg_buf;
@@ -253,7 +207,7 @@ static void adtg_log_task(void *unused, int unused2)
     free(buf);
 
     adtg_running = 0;
-    NotifyBox(2000, "ADTG dump saved: DCIM/adtg.bin");
+    NotifyBox(2000, "ADTG dump: %d part(s) saved", adtg_part);
 }
 
 static void adtg_log_select(void *priv, int argument)
@@ -274,21 +228,24 @@ static struct menu_entry adtg_log_menu[] =
         .name = "ADTG/CMOS log (1200D)",
         .select = adtg_log_select,
         .priv = adtg_log_task,
-        .help = "Log CMOS/ADTG writes to DCIM/adtg.bin. Select again to stop+save.",
+        .help = "Log CMOS/ADTG writes to DCIM/adtg_pNNN.bin. Select again to stop+save.",
         .depends_on = DEP_LIVEVIEW,
     },
 };
 
 static unsigned int adtg_log_init()
 {
-    /* CONFIG_1200D-only module (modules.included); guard removed so the
-       standalone module make (no platform defines) still references the menu */
     menu_add("Debug", adtg_log_menu, COUNT(adtg_log_menu));
     return 0;
 }
 
 static unsigned int adtg_log_deinit()
 {
+    if(adtg_running)
+    {
+        adtg_stop = 1;
+        msleep(200);
+    }
     return 0;
 }
 
