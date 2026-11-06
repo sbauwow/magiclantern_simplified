@@ -1,0 +1,50 @@
+# 1200D crop_rec PRESET DERIVATION — from hw capture 2026-11-06 (adtg_p001-003)
+# Distilled from 1200D_hw_modes/ dwell tables + adtg_timeline.py analysis.
+# Next session: port the preset engine into crop_rec.c using these tables.
+
+## ZOOM (crop) BASE — the native center-crop readout (from 02_zoom_x5.txt, 73 regs)
+
+CMOS deltas on zoom entry (normal -> zoom):
+  c6: 800 -> A6A     (THE crop-mode bit — biggest single discriminator)
+  c7: 001 -> 401
+  c4: 014 -> 2D4
+  c5: C64 -> C60
+  (c1/c2/c3 unchanged: whatever the underlying movie mode was)
+
+ADTG deltas on zoom entry:
+  8000: 0 -> 0005 (x5)  / 0006 (x10)   <- zoom-level selector
+  805F: -> 00C5 (x5)    / 00E9 (x10)   <- blanking pair (always written together)
+  8061: -> 00C5 (x5)    / 00E9 (x10)
+  8172: -> 067D (x5)    / 06F0 (x10)   <- readout window start/size pair
+  8173: -> 0684 (x5)    / 05FE (x10)
+  8882-8888 quartet: -> 0410 0410 0413 0412 (both zoom levels)
+
+x5 and x10 differ ONLY in: 8000, 805F/8061, 8172/8173.
+=> PRESET RECIPE: base = zoom table; to size a window, scale/vary
+   805F/8061 (blanking) + 8172/8173 (window) + 888x quartet (per-mode
+   value seen: 0410-family zoom, 040B/0415/0417/041C families normal).
+   Calibrate pixels-per-unit from ONE zoom-mode raw buffer dump next hw run
+   (raw_info active_rect in x5 vs x10 gives the mapping for 8172/8173).
+
+## NORMAL MODE FAMILIES (labels PROVISIONAL — confirm next run)
+  1080p-vs-720p discriminator: c1 443/7D1 (start state) vs 423/7D0 (after
+  first switch). NOTE: all pre-2026-11-06 "1080p idle" captures show c1=423 —
+  those sessions were probably in 720p rec size without anyone checking OSD.
+  Four 888x quartets at LV restarts: 0417/0416/0414/0416, 040B/040B/040C/040B,
+  0415/0414/0418/0417, 041C/041D/041E/041D.
+
+## LV-RESTART FINGERPRINT (seen 4x = 4 LV-restarting actions in the run)
+  8000->0, c6 absent, 8826 -> 2404, c6->800, 8000->3->6, 8826->0B04,
+  c6 absent, c6->800, 8172/8173 written, 8000->0->6.
+  8826 = corpus binned-vs-1:1 candidate: 2404 during restart, 0B04 steady.
+  Corpus VAR-5/VAR-6 twins (2404 vs 0C00) = mode-relevant, confirmed live.
+
+## ENGINE PORT NOTES (crop_rec.c)
+  - Hook ADTG_WRITE 0xFF3A246C (r1 = list) + CMOS_WRITE 0xFF3A265C (r0 = list)
+    via patch_hook_function — same mechanism as adtg_log v8 (PROVEN on hw;
+    gdb watchpoints WEDGE the camera on transitions — do not use).
+  - check_cmos_vidmode equivalent: c6 == 0xA6A = zoom/crop active.
+  - Write path: modify list words in-place in the hook callback (regs are
+    readable, list is RAM/ROM — copy small lists to a scratch buffer if ROM).
+  - RAW buffer: LV raw via CONFIG_EDMAC_RAW_SLURP (already working);
+    zoom-mode raw geometry needs one calibration dump.
