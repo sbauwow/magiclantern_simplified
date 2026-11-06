@@ -141,6 +141,9 @@ int apply_patches(struct patch *patches, uint32_t count);
 /* undo the patching done by apply_patches or patch_hook_function */
 int unpatch_memory(uintptr_t addr);
 
+/* classic single-instruction patch (compat API for ported code, e.g. gdb.c) */
+uint32_t patch_instruction(uintptr_t addr, uint32_t old_instr, uint32_t new_instr, const char *description);
+
 /* 
  * Hook a custom function in the middle of some ASM code
  * similar to GDB hooks, but lighter:

@@ -524,4 +524,19 @@ static void patch_simple_init()
 
 INIT_FUNC("patch", patch_simple_init);
 
+/* Classic single-instruction patch API (compat for code ported from older
+ * ML trees, e.g. src/gdb.c under CONFIG_GDB). Maps onto apply_patches(). */
+uint32_t patch_instruction(uintptr_t addr, uint32_t old_instr, uint32_t new_instr, const char *description)
+{
+    struct patch p = {
+        .addr = (uint8_t *)addr,
+        .size = 4,
+        .is_instruction = 1,
+        .description = description,
+    };
+    p.old_value = old_instr; /* anonymous union: set after init */
+    p.new_value = new_instr;
+    return (uint32_t)apply_patches(&p, 1);
+}
+
 #endif // defined(CONFIG_MMU_REMAP) || defined(CONFIG_DIGIC_45) || defined(CONFIG_DIGIC_VI)

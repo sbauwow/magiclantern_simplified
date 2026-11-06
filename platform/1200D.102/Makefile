@@ -8,6 +8,11 @@ FIR_BASE = 0x800120
 
 CONFIG_LVAPP_HACK_RELOC = y
 
+# gdb bkpt/watchpoint engine (src/gdb.c) — exports gdb_add_watchpoint /
+# gdb_delete_bkpt for adtg_log.mo (CMOS/ADTG watchpoint logging). Default n
+# in platform/Makefile; adtg_log is unresolvable without this (2026-11-06).
+CONFIG_GDB = y
+
 # LAPIS codec (600D family, ROM-verified 2026-11-02) — not the AK default
 ML_AUDIO_OBJ = audio-lapis.o
 
