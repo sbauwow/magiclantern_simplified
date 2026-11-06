@@ -33,6 +33,9 @@ unsigned int *adtg_buf = NULL;
 unsigned int adtg_buf_pos = 0;
 unsigned int adtg_buf_pos_max = 0;
 
+static volatile uint32_t adtg_running = 0;
+static volatile uint32_t adtg_stop = 0;
+
 unsigned short cmos_regs[8];
 
 static void cmos_reg_update(unsigned short cmos_data)
@@ -91,6 +94,13 @@ static void cmos_log(breakpoint_t *bkpt)
 
 static void adtg_log_task(void *unused, int unused2)
 {
+    if(adtg_running)
+    {
+        return;
+    }
+    adtg_running = 1;
+    adtg_stop = 0;
+
     adtg_buf_pos_max = 128 * 1024;
 
     adtg_buf = malloc(adtg_buf_pos_max * 4 + 0x100);
@@ -98,6 +108,7 @@ static void adtg_log_task(void *unused, int unused2)
     if(!adtg_buf)
     {
         NotifyBox(2000, "malloc failed");
+        adtg_running = 0;
         return;
     }
 
@@ -107,6 +118,9 @@ static void adtg_log_task(void *unused, int unused2)
     if(!gdb_setup())
     {
         NotifyBox(2000, "gdb setup failed");
+        free(adtg_buf);
+        adtg_buf = NULL;
+        adtg_running = 0;
         return;
     }
 
@@ -118,13 +132,27 @@ static void adtg_log_task(void *unused, int unused2)
         NotifyBox(2000, "watchpoint setup failed");
     }
 
-    /* wait for buffer being filled */
-    while(adtg_buf_pos + 2 < adtg_buf_pos_max)
+    /* wait for buffer being filled; exit paths: buffer full, second select
+     * (adtg_stop), or 30 s with no new writes (idle — dump what we have) */
+    uint32_t last_pos = 0;
+    uint32_t last_change = get_ms_clock();
+    while(adtg_buf_pos + 2 < adtg_buf_pos_max && !adtg_stop)
     {
-        bmp_printf(FONT_MED, 10, 20, "cmos:");
+        uint32_t fill_pct = adtg_buf_pos_max ? (adtg_buf_pos * 100 / adtg_buf_pos_max) : 0;
+        bmp_printf(FONT_MED, 10, 20, "cmos: buf %3u%%  SET=stop ", fill_pct);
         for(int pos = 0; pos < 8; pos++)
         {
             bmp_printf(FONT_MED, 10, 40 + pos * font_med.height, "[%d] 0x%03X ", pos, cmos_regs[pos]);
+        }
+        uint32_t now = get_ms_clock();
+        if(adtg_buf_pos != last_pos)
+        {
+            last_pos = adtg_buf_pos;
+            last_change = now;
+        }
+        else if(now - last_change > 30000)
+        {
+            break;
         }
         msleep(100);
     }
@@ -147,16 +175,29 @@ static void adtg_log_task(void *unused, int unused2)
     adtg_buf = NULL;
     free(buf);
 
+    adtg_running = 0;
     NotifyBox(2000, "ADTG dump saved: DCIM/adtg.bin");
+}
+
+static void adtg_log_select(void *priv, int argument)
+{
+    if(adtg_running)
+    {
+        /* second select while running: stop loop and save what we have */
+        adtg_stop = 1;
+        NotifyBox(2000, "stopping + saving...");
+        return;
+    }
+    run_in_separate_task(priv, argument);
 }
 
 static struct menu_entry adtg_log_menu[] =
 {
     {
         .name = "ADTG/CMOS log (1200D)",
-        .select = run_in_separate_task,
+        .select = adtg_log_select,
         .priv = adtg_log_task,
-        .help = "Log CMOS/ADTG writes to DCIM/adtg.bin (watchpoints).",
+        .help = "Log CMOS/ADTG writes to DCIM/adtg.bin. Select again to stop+save.",
         .depends_on = DEP_LIVEVIEW,
     },
 };
