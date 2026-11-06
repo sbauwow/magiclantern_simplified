@@ -99,10 +99,38 @@ static void crop_cmos_hook(uint32_t *regs, uint32_t *stack, uint32_t pc)
     if(changed) regs[0] = (uint32_t) cmos_scratch;
 }
 
+static int crop_hooks_installed = 0;
+
+static int crop_install_hooks(void)
+{
+    if(crop_hooks_installed) return E_PATCH_OK;
+    int h1 = patch_hook_function(ADTG_WRITE_FUNC, ADTG_WRITE_INSTR, crop_adtg_hook, "crop_adtg");
+    int h2 = patch_hook_function(CMOS_WRITE_FUNC, CMOS_WRITE_INSTR, crop_cmos_hook, "crop_cmos");
+    if(h1 != E_PATCH_OK || h2 != E_PATCH_OK)
+    {
+        if(h1 == E_PATCH_OK) unpatch_memory(ADTG_WRITE_FUNC);
+        if(h2 == E_PATCH_OK) unpatch_memory(CMOS_WRITE_FUNC);
+        return -1;   /* sites busy (e.g. adtg_log running) — retry when toggled */
+    }
+    crop_hooks_installed = 1;
+    return E_PATCH_OK;
+}
+
 static void crop_preset_toggle(void *priv, int delta)
 {
     crop_preset_index = COERCE(crop_preset_index + delta, 0, CROP_1200D_NUM - 1);
-    if(crop_preset_index) beep();
+    if(crop_preset_index == CROP_1200D_OFF)
+    {
+        /* restore stock behavior but keep hooks (cheap, avoids site churn) */
+        return;
+    }
+    if(crop_install_hooks() != E_PATCH_OK)
+    {
+        NotifyBox(2000, "hook sites busy — stop ADTG logger first");
+        crop_preset_index = CROP_1200D_OFF;
+        return;
+    }
+    beep();
 }
 
 static struct menu_entry crop_menu[] = {
@@ -119,22 +147,20 @@ static struct menu_entry crop_menu[] = {
 
 static unsigned int crop_init()
 {
-    int h1 = patch_hook_function(ADTG_WRITE_FUNC, ADTG_WRITE_INSTR, crop_adtg_hook, "crop_adtg");
-    int h2 = patch_hook_function(CMOS_WRITE_FUNC, CMOS_WRITE_INSTR, crop_cmos_hook, "crop_cmos");
-    if(h1 != E_PATCH_OK || h2 != E_PATCH_OK)
-    {
-        if(h1 == E_PATCH_OK) unpatch_memory(ADTG_WRITE_FUNC);
-        if(h2 == E_PATCH_OK) unpatch_memory(CMOS_WRITE_FUNC);
-        return CBR_RET_ERROR;
-    }
+    /* menu only — hooks install lazily on preset activation (avoids
+     * load-order conflict with adtg_log over the same patch sites) */
     menu_add("Movie", crop_menu, COUNT(crop_menu));
     return 0;
 }
 
 static unsigned int crop_deinit()
 {
-    unpatch_memory(ADTG_WRITE_FUNC);
-    unpatch_memory(CMOS_WRITE_FUNC);
+    if(crop_hooks_installed)
+    {
+        unpatch_memory(ADTG_WRITE_FUNC);
+        unpatch_memory(CMOS_WRITE_FUNC);
+        crop_hooks_installed = 0;
+    }
     return 0;
 }
 
