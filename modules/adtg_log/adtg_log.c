@@ -40,10 +40,18 @@ static volatile uint32_t adtg_stop = 0;
  * 2-6 regs (measured run3: median 4, max 6) — flap regs 0x1D4/0x4F00/0x174...
  * A real mode/state change rewrites 100+ regs (measured: 202). Threshold 8
  * sits between. Exact-match dedup (v4) never triggered because of jitter. */
-static unsigned short adtg_prev_val[4096];
-static unsigned char adtg_prev_present[4096];
+static unsigned short adtg_prev_val[8192];
+static unsigned char adtg_prev_present[8192];
 static unsigned int adtg_logged = 0;
 static volatile unsigned int adtg_last_activity = 0;
+
+/* corpus reg families: <0x1000 and 0x8000-0x8FFF (e.g. 0x8826). Map both
+ * into one 8K table; collisions between X and 0x8000+X only ever cause
+ * extra logging, never dropped data. */
+static unsigned int adtg_reg_idx(unsigned int r)
+{
+    return (r < 0x1000) ? r : (0x1000 + (r & 0xFFF));
+}
 
 static unsigned int cmos_last[16];
 static unsigned int cmos_last_len = 0;
@@ -91,12 +99,8 @@ static void adtg_log(breakpoint_t *bkpt)
     unsigned int changed = 0;
     for(unsigned int p = start + 1; p < adtg_buf_pos - 1; p++)
     {
-        unsigned int r = adtg_buf[p] >> 16;
-        if(r >= 4096)
-        {
-            changed++;
-        }
-        else if(!adtg_prev_present[r] || adtg_prev_val[r] != (adtg_buf[p] & 0xFFFF))
+        unsigned int r = adtg_reg_idx(adtg_buf[p] >> 16);
+        if(!adtg_prev_present[r] || adtg_prev_val[r] != (adtg_buf[p] & 0xFFFF))
         {
             changed++;
         }
@@ -110,12 +114,9 @@ static void adtg_log(breakpoint_t *bkpt)
     {
         for(unsigned int p = start + 1; p < adtg_buf_pos - 1; p++)
         {
-            unsigned int r = adtg_buf[p] >> 16;
-            if(r < 4096)
-            {
-                adtg_prev_val[r] = adtg_buf[p] & 0xFFFF;
-                adtg_prev_present[r] = 1;
-            }
+            unsigned int r = adtg_reg_idx(adtg_buf[p] >> 16);
+            adtg_prev_val[r] = adtg_buf[p] & 0xFFFF;
+            adtg_prev_present[r] = 1;
         }
         adtg_logged++;
     }
@@ -182,7 +183,7 @@ static void adtg_log_task(void *unused, int unused2)
     adtg_stop = 0;
     cmos_last_len = 0;
     adtg_logged = 0;
-    for(unsigned int i = 0; i < 4096; i++) adtg_prev_present[i] = 0;
+    for(unsigned int i = 0; i < 8192; i++) adtg_prev_present[i] = 0;
     adtg_last_activity = get_ms_clock();
 
     adtg_buf_pos_max = 128 * 1024;
