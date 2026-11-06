@@ -36,6 +36,25 @@ unsigned int adtg_buf_pos_max = 0;
 static volatile uint32_t adtg_running = 0;
 static volatile uint32_t adtg_stop = 0;
 
+/* change-only logging: the 1200D replays the full ~1000-word ADTG table
+ * (and the 8-reg CMOS set) periodically in LV — duplicates flooded the
+ * 128K buffer before any mode switch (hw lesson 2026-11-06 run2: 133
+ * identical replays, 22 identical CMOS bursts, zero mode data). */
+static unsigned int adtg_last[1024];
+static unsigned int adtg_last_len = 0;
+static unsigned int cmos_last[16];
+static unsigned int cmos_last_len = 0;
+static volatile unsigned int adtg_logged = 0;
+
+static int words_equal(const unsigned int *a, const unsigned int *b, unsigned int n)
+{
+    for(unsigned int i = 0; i < n; i++)
+    {
+        if(a[i] != b[i]) return 0;
+    }
+    return 1;
+}
+
 unsigned short cmos_regs[8];
 
 static void cmos_reg_update(unsigned short cmos_data)
@@ -58,6 +77,7 @@ static void adtg_log(breakpoint_t *bkpt)
 
     if(adtg_buf_pos + 4 >= adtg_buf_pos_max) return;
 
+    unsigned int start = adtg_buf_pos;
     adtg_buf[adtg_buf_pos++] = 0xFFFFFFFF;
 
     while(*data_buf != 0xFFFFFFFF && adtg_buf_pos + 2 < adtg_buf_pos_max)
@@ -66,6 +86,22 @@ static void adtg_log(breakpoint_t *bkpt)
     }
 
     adtg_buf[adtg_buf_pos++] = 0xFFFFFFFF;
+
+    /* change-only: drop burst if identical to the last logged one */
+    unsigned int n = adtg_buf_pos - start - 2;
+    if(n == adtg_last_len && n <= 1024 && words_equal(&adtg_buf[start + 1], adtg_last, n))
+    {
+        adtg_buf_pos = start;
+    }
+    else
+    {
+        if(n <= 1024)
+        {
+            for(unsigned int i = 0; i < n; i++) adtg_last[i] = adtg_buf[start + 1 + i];
+            adtg_last_len = n;
+        }
+        adtg_logged++;
+    }
 }
 
 static void cmos_log(breakpoint_t *bkpt)
@@ -81,6 +117,7 @@ static void cmos_log(breakpoint_t *bkpt)
 
     if(adtg_buf_pos + 4 >= adtg_buf_pos_max) return;
 
+    unsigned int start = adtg_buf_pos;
     adtg_buf[adtg_buf_pos++] = 0x00FF0000;
 
     while(*data_buf != 0xFFFF && adtg_buf_pos + 2 < adtg_buf_pos_max)
@@ -90,6 +127,22 @@ static void cmos_log(breakpoint_t *bkpt)
     }
 
     adtg_buf[adtg_buf_pos++] = 0xFFFF0000;
+
+    /* change-only: drop burst if identical to the last logged one */
+    unsigned int n = adtg_buf_pos - start - 2;
+    if(n == cmos_last_len && n <= 16 && words_equal(&adtg_buf[start + 1], cmos_last, n))
+    {
+        adtg_buf_pos = start;
+    }
+    else
+    {
+        if(n <= 16)
+        {
+            for(unsigned int i = 0; i < n; i++) cmos_last[i] = adtg_buf[start + 1 + i];
+            cmos_last_len = n;
+        }
+        adtg_logged++;
+    }
 }
 
 static void adtg_log_task(void *unused, int unused2)
@@ -100,6 +153,9 @@ static void adtg_log_task(void *unused, int unused2)
     }
     adtg_running = 1;
     adtg_stop = 0;
+    adtg_last_len = 0;
+    cmos_last_len = 0;
+    adtg_logged = 0;
 
     adtg_buf_pos_max = 128 * 1024;
 
@@ -139,7 +195,7 @@ static void adtg_log_task(void *unused, int unused2)
     while(adtg_buf_pos + 2 < adtg_buf_pos_max && !adtg_stop)
     {
         uint32_t fill_pct = adtg_buf_pos_max ? (adtg_buf_pos * 100 / adtg_buf_pos_max) : 0;
-        bmp_printf(FONT_MED, 10, 20, "cmos: buf %3u%%  SET=stop ", fill_pct);
+        bmp_printf(FONT_MED, 10, 20, "cmos: new=%u buf %3u%% SET=stop", adtg_logged, fill_pct);
         for(int pos = 0; pos < 8; pos++)
         {
             bmp_printf(FONT_MED, 10, 40 + pos * font_med.height, "[%d] 0x%03X ", pos, cmos_regs[pos]);
