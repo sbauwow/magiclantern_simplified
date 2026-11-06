@@ -101,6 +101,15 @@ static void adtg_log_task(void *unused, int unused2)
         return;
     }
 
+    /* initialize gdb engine first — without gdb_setup() gdb_installed stays 0
+     * and every gdb_add_watchpoint returns NULL ("watchpoint setup failed",
+     * live cmos stays 0 — callbacks never fire). 2018 adtg_log.c:195 parity. */
+    if(!gdb_setup())
+    {
+        NotifyBox(2000, "gdb setup failed");
+        return;
+    }
+
     /* set watchpoints at ADTG and CMOS writes */
     breakpoint_t *bkpt1 = gdb_add_watchpoint(ADTG_WRITE_FUNC, 0, adtg_log);
     breakpoint_t *bkpt2 = gdb_add_watchpoint(CMOS_WRITE_FUNC, 0, cmos_log);
