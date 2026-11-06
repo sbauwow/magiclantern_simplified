@@ -36,24 +36,17 @@ unsigned int adtg_buf_pos_max = 0;
 static volatile uint32_t adtg_running = 0;
 static volatile uint32_t adtg_stop = 0;
 
-/* change-only logging: the 1200D replays the full ~1000-word ADTG table
- * (and the 8-reg CMOS set) periodically in LV — duplicates flooded the
- * 128K buffer before any mode switch (hw lesson 2026-11-06 run2: 133
- * identical replays, 22 identical CMOS bursts, zero mode data). */
-static unsigned int adtg_last[1024];
-static unsigned int adtg_last_len = 0;
+/* change-only logging with jitter threshold: adjacent LV replays differ by
+ * 2-6 regs (measured run3: median 4, max 6) — flap regs 0x1D4/0x4F00/0x174...
+ * A real mode/state change rewrites 100+ regs (measured: 202). Threshold 8
+ * sits between. Exact-match dedup (v4) never triggered because of jitter. */
+static unsigned short adtg_prev_val[4096];
+static unsigned char adtg_prev_present[4096];
+static unsigned int adtg_logged = 0;
+static volatile unsigned int adtg_last_activity = 0;
+
 static unsigned int cmos_last[16];
 static unsigned int cmos_last_len = 0;
-static volatile unsigned int adtg_logged = 0;
-
-static int words_equal(const unsigned int *a, const unsigned int *b, unsigned int n)
-{
-    for(unsigned int i = 0; i < n; i++)
-    {
-        if(a[i] != b[i]) return 0;
-    }
-    return 1;
-}
 
 unsigned short cmos_regs[8];
 
@@ -87,21 +80,40 @@ static void adtg_log(breakpoint_t *bkpt)
 
     adtg_buf[adtg_buf_pos++] = 0xFFFFFFFF;
 
-    /* change-only: drop burst if identical to the last logged one */
-    unsigned int n = adtg_buf_pos - start - 2;
-    if(n == adtg_last_len && n <= 1024 && words_equal(&adtg_buf[start + 1], adtg_last, n))
+    /* jitter-threshold dedup: count regs whose value changed vs previous
+     * table; <= 8 = replay jitter -> drop, > 8 = real change -> keep */
+    unsigned int changed = 0;
+    for(unsigned int p = start + 1; p < adtg_buf_pos - 1; p++)
+    {
+        unsigned int r = adtg_buf[p] >> 16;
+        if(r >= 4096)
+        {
+            changed++;
+        }
+        else if(!adtg_prev_present[r] || adtg_prev_val[r] != (adtg_buf[p] & 0xFFFF))
+        {
+            changed++;
+        }
+    }
+
+    if(changed <= 8)
     {
         adtg_buf_pos = start;
     }
     else
     {
-        if(n <= 1024)
+        for(unsigned int p = start + 1; p < adtg_buf_pos - 1; p++)
         {
-            for(unsigned int i = 0; i < n; i++) adtg_last[i] = adtg_buf[start + 1 + i];
-            adtg_last_len = n;
+            unsigned int r = adtg_buf[p] >> 16;
+            if(r < 4096)
+            {
+                adtg_prev_val[r] = adtg_buf[p] & 0xFFFF;
+                adtg_prev_present[r] = 1;
+            }
         }
         adtg_logged++;
     }
+    adtg_last_activity = get_ms_clock();
 }
 
 static void cmos_log(breakpoint_t *bkpt)
@@ -130,7 +142,15 @@ static void cmos_log(breakpoint_t *bkpt)
 
     /* change-only: drop burst if identical to the last logged one */
     unsigned int n = adtg_buf_pos - start - 2;
-    if(n == cmos_last_len && n <= 16 && words_equal(&adtg_buf[start + 1], cmos_last, n))
+    unsigned int same = (n == cmos_last_len && n <= 16);
+    if(same)
+    {
+        for(unsigned int i = 0; i < n; i++)
+        {
+            if(adtg_buf[start + 1 + i] != cmos_last[i]) { same = 0; break; }
+        }
+    }
+    if(same)
     {
         adtg_buf_pos = start;
     }
@@ -143,6 +163,7 @@ static void cmos_log(breakpoint_t *bkpt)
         }
         adtg_logged++;
     }
+    adtg_last_activity = get_ms_clock();
 }
 
 static void adtg_log_task(void *unused, int unused2)
@@ -153,9 +174,10 @@ static void adtg_log_task(void *unused, int unused2)
     }
     adtg_running = 1;
     adtg_stop = 0;
-    adtg_last_len = 0;
     cmos_last_len = 0;
     adtg_logged = 0;
+    for(unsigned int i = 0; i < 4096; i++) adtg_prev_present[i] = 0;
+    adtg_last_activity = get_ms_clock();
 
     adtg_buf_pos_max = 128 * 1024;
 
@@ -188,10 +210,8 @@ static void adtg_log_task(void *unused, int unused2)
         NotifyBox(2000, "watchpoint setup failed");
     }
 
-    /* wait for buffer being filled; exit paths: buffer full, second select
-     * (adtg_stop), or 30 s with no new writes (idle — dump what we have) */
-    uint32_t last_pos = 0;
-    uint32_t last_change = get_ms_clock();
+    /* wait for real changes; exit paths: buffer full, second select
+     * (adtg_stop), or 30 s with no writer activity at all */
     while(adtg_buf_pos + 2 < adtg_buf_pos_max && !adtg_stop)
     {
         uint32_t fill_pct = adtg_buf_pos_max ? (adtg_buf_pos * 100 / adtg_buf_pos_max) : 0;
@@ -200,13 +220,7 @@ static void adtg_log_task(void *unused, int unused2)
         {
             bmp_printf(FONT_MED, 10, 40 + pos * font_med.height, "[%d] 0x%03X ", pos, cmos_regs[pos]);
         }
-        uint32_t now = get_ms_clock();
-        if(adtg_buf_pos != last_pos)
-        {
-            last_pos = adtg_buf_pos;
-            last_change = now;
-        }
-        else if(now - last_change > 30000)
+        if(get_ms_clock() - adtg_last_activity > 30000)
         {
             break;
         }
