@@ -66,7 +66,13 @@ static void adtg_log(breakpoint_t *bkpt)
         return;
     }
 
-    uint32_t* data_buf = (uint32_t*) regs[0];
+    /* r0-at-entry = chip-select mask (bits 0-4, tst r4,#1/2/4/8/16),
+     * r1-at-entry = POINTER to u32 word list, 0xFFFFFFFF terminator
+     * (ROM: ldr r0,[r6] @0xFF3A2514, add r6,#4 @0xFF3A259C, cmn r0,#1
+     * @0xFF3A25A4). Walking r0 was the run2-4 bug: mask (e.g. 0x1F) used
+     * as a pointer -> read a low-address code mirror -> 982 words of
+     * halfword-swapped ARM instructions as "register data". */
+    uint32_t* data_buf = (uint32_t*) regs[1];
 
     if(adtg_buf_pos + 4 >= adtg_buf_pos_max) return;
 
