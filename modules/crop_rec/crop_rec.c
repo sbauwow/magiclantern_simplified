@@ -12,6 +12,143 @@
 #include <fps.h>
 #include <shoot.h>
 
+/*=========================== 1200D (T5) ===========================*
+ * Self-contained crop engine — patch-hook based (see adtg_log v8,
+ * modules/crop_rec/1200D_preset_derivation.txt, hw capture 2026-11-06).
+ * The D5 body below stays for other cameras.
+ *==================================================================*/
+#if defined(CONFIG_1200D)
+
+#define ADTG_WRITE_FUNC   0xFF3A246C   /* r0=chip mask, r1=u32 list ptr (0xFFFFFFFF term) */
+#define ADTG_WRITE_INSTR  0xE92D47F0
+#define CMOS_WRITE_FUNC   0xFF3A265C   /* r0=u16 list ptr (0xFFFF term) */
+#define CMOS_WRITE_INSTR  0xE92D41F0
+
+static CONFIG_INT("crop.preset", crop_preset_index, 0);
+
+enum { CROP_1200D_OFF = 0, CROP_1200D_ZOOM_CROP, CROP_1200D_NUM };
+static const char *crop_names[] = { "OFF", "Zoom-crop 1:1 (experimental)" };
+
+static uint32_t adtg_scratch[1024];
+static uint16_t cmos_scratch[64];
+
+/* zoom-crop register set captured on hw (x5 level): 1200D_hw_modes/02 */
+static const uint16_t crop_cmos_override[][2] = {
+    {4, 0x2D4}, {5, 0xC60}, {6, 0xA6A}, {7, 0x401},
+};
+static const uint32_t crop_adtg_override[][2] = {
+    {0x8000, 0x0005}, {0x805F, 0x00C5}, {0x8061, 0x00C5},
+    {0x8172, 0x067D}, {0x8173, 0x0684},
+    {0x8882, 0x0410}, {0x8884, 0x0410}, {0x8886, 0x0413}, {0x8888, 0x0412},
+};
+
+static uint16_t crop_cmos_map(uint16_t reg, uint16_t val)
+{
+    if(crop_preset_index != CROP_1200D_ZOOM_CROP) return val;
+    for(unsigned i = 0; i < COUNT(crop_cmos_override); i++)
+        if(reg == crop_cmos_override[i][0]) return crop_cmos_override[i][1];
+    return val;
+}
+
+static uint32_t crop_adtg_map(uint32_t reg, uint32_t val)
+{
+    if(crop_preset_index != CROP_1200D_ZOOM_CROP) return val;
+    for(unsigned i = 0; i < COUNT(crop_adtg_override); i++)
+        if(reg == crop_adtg_override[i][0]) return crop_adtg_override[i][1];
+    return val;
+}
+
+static void crop_adtg_hook(uint32_t *regs, uint32_t *stack, uint32_t pc)
+{
+    (void)stack; (void)pc;
+    if(crop_preset_index == CROP_1200D_OFF) return;
+    uint32_t *src = (uint32_t *) regs[1];
+    if(!src) return;
+    uint32_t n = 0;
+    while(src[n] != 0xFFFFFFFF && n < 1000) n++;
+    if(!n || n >= 1000) return;                    /* keep ROM list if odd */
+    int changed = 0;
+    for(uint32_t i = 0; i < n; i++)
+    {
+        uint32_t v = crop_adtg_map(src[i] >> 16, src[i] & 0xFFFF);
+        adtg_scratch[i] = (v << 16) | (src[i] & 0xFFFF);
+        if(adtg_scratch[i] != src[i]) changed = 1;
+    }
+    adtg_scratch[n] = 0xFFFFFFFF;
+    if(changed) regs[1] = (uint32_t) adtg_scratch;
+}
+
+static void crop_cmos_hook(uint32_t *regs, uint32_t *stack, uint32_t pc)
+{
+    (void)stack; (void)pc;
+    if(crop_preset_index == CROP_1200D_OFF) return;
+    uint16_t *src = (uint16_t *) regs[0];
+    if(!src) return;
+    uint32_t n = 0;
+    while(src[n] != 0xFFFF && n < 60) n++;
+    if(!n || n >= 60) return;
+    int changed = 0;
+    for(uint32_t i = 0; i < n; i++)
+    {
+        uint16_t v = crop_cmos_map((src[i] >> 12) & 0x7, src[i] & 0xFFF);
+        cmos_scratch[i] = (v << 12) | (src[i] & 0xF000 & 0xF000);
+        cmos_scratch[i] = (src[i] & 0xF000) | (v & 0xFFF);
+        if(cmos_scratch[i] != src[i]) changed = 1;
+    }
+    cmos_scratch[n] = 0xFFFF;
+    if(changed) regs[0] = (uint32_t) cmos_scratch;
+}
+
+static void crop_preset_toggle(void *priv, int delta)
+{
+    crop_preset_index = COERCE(crop_preset_index + delta, 0, CROP_1200D_NUM - 1);
+    if(crop_preset_index) beep();
+}
+
+static struct menu_entry crop_menu[] = {
+    {
+        .name = "Crop preset (1200D)",
+        .select = crop_preset_toggle,
+        .priv = &crop_preset_index,
+        .min = 0, .max = CROP_1200D_NUM - 1,
+        .choices = (const char **) crop_names,
+        .help = "Enforce zoom-crop register set in normal movie LV. Experimental: LV/raw geometry not yet calibrated (needs zoom raw dump).",
+        .depends_on = DEP_LIVEVIEW,
+    },
+};
+
+static unsigned int crop_init()
+{
+    int h1 = patch_hook_function(ADTG_WRITE_FUNC, ADTG_WRITE_INSTR, crop_adtg_hook, "crop_adtg");
+    int h2 = patch_hook_function(CMOS_WRITE_FUNC, CMOS_WRITE_INSTR, crop_cmos_hook, "crop_cmos");
+    if(h1 != E_PATCH_OK || h2 != E_PATCH_OK)
+    {
+        if(h1 == E_PATCH_OK) unpatch_memory(ADTG_WRITE_FUNC);
+        if(h2 == E_PATCH_OK) unpatch_memory(CMOS_WRITE_FUNC);
+        return CBR_RET_ERROR;
+    }
+    menu_add("Movie", crop_menu, COUNT(crop_menu));
+    return 0;
+}
+
+static unsigned int crop_deinit()
+{
+    unpatch_memory(ADTG_WRITE_FUNC);
+    unpatch_memory(CMOS_WRITE_FUNC);
+    return 0;
+}
+
+MODULE_INFO_START()
+    MODULE_INIT(crop_init)
+    MODULE_DEINIT(crop_deinit)
+MODULE_INFO_END()
+MODULE_CBRS_START()
+MODULE_CBRS_END()
+MODULE_PROPHANDLERS_START()
+MODULE_PROPHANDLERS_END()
+
+#else /* ================= original D5 module body ================= */
+
 #undef CROP_DEBUG
 
 #ifdef CROP_DEBUG
@@ -2079,3 +2216,5 @@ MODULE_PROPHANDLERS_START()
     MODULE_PROPHANDLER(PROP_LV_ACTION)
     MODULE_PROPHANDLER(PROP_LV_DISPSIZE)
 MODULE_PROPHANDLERS_END()
+
+#endif /* CONFIG_1200D */
