@@ -29,16 +29,16 @@
 5. CANON MOV PLAYBACK TEST: RAW video OFF, mic in, record 5s normal MOV, play it back
    in-camera (expect AUDIBLE). This closes the Nov 4 "audio not playing back" question.
 
-## C. ADTG/CMOS DUMP — crop_rec data (~6 min)   [BEFORE selftest]
+## C. ADTG/CMOS DUMP — crop_rec data (~6 min)   [BEFORE selftest; v3 build f3ddc81b1+]
 1. Movie mode, LV on, 1080p
-2. ML menu -> Debug -> "ADTG/CMOS log (1200D)" -> select
-3. Screen shows "cmos:" + 8 values. THE KEY CHECK: values animate/change while you
-   toggle modes -> addresses confirmed. Write down: animated y/n
+2. ML menu -> Debug -> "ADTG/CMOS log (1200D)" -> select (starts; screen shows "cmos: buf N% SET=stop")
+3. Screen shows live cmos values + buffer %. Values animate while toggling = watchpoints firing.
 4. Cycle modes, ~30s each, no recording:
-   1080p -> 720p -> zoom x5 -> zoom x10 -> back 1080p -> P-mode LV 30s (full-sensor
-   reference) -> back to Movie 1080p
-5. Ends with BEEP + "ADTG dump saved: DCIM/adtg.bin". If no beep within ~6 min of
-   toggling: just power off (buffer didn't fill — that's data, report it)
+   1080p -> 720p -> zoom x5 (MAGNIFY btn, top-right rear) -> zoom x10 -> back to 1080p
+   -> P-mode LV 30s (full-sensor reference) -> back to Movie 1080p
+5. SAVE: select the SAME menu entry AGAIN -> "stopping + saving..." -> beep ->
+   "ADTG dump saved: DCIM/adtg.bin". DO NOT POWER OFF BEFORE THIS — buffer is RAM-only.
+   (Auto-fallbacks: 30s idle auto-saves; 100% full auto-saves.)
 
 ## D. SELFTEST SCRIPT (~2.5 min runtime)
 0. RAW video OFF first! (Movie menu: RAW video -> OFF. A/B audio clips must be Canon
