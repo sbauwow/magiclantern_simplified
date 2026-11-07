@@ -26,9 +26,16 @@
 #define CMOS_WRITE_INSTR  0xE92D41F0
 
 static CONFIG_INT("crop.preset", crop_preset_index, 0);
+static CONFIG_INT("glitch.intensity", glitch_intensity, 4);
 
-enum { CROP_1200D_OFF = 0, CROP_1200D_ZOOM_CROP, CROP_1200D_NUM };
-static const char *crop_names[] = { "OFF", "Zoom-crop 1:1 (experimental)" };
+enum { CROP_1200D_OFF = 0, CROP_1200D_ZOOM_CROP,
+       CROP_1200D_GLITCH_HYBRID, CROP_1200D_GLITCH_STROBE,
+       CROP_1200D_GLITCH_SPLICE, CROP_1200D_GLITCH_CHAOS,
+       CROP_1200D_NUM };
+static const char *crop_names[] = {
+    "OFF", "Zoom-crop 1:1 (experimental)",
+    "Glitch: Hybrid", "Glitch: Strobe", "Glitch: Splice", "Glitch: Chaos",
+};
 
 static uint32_t adtg_scratch[1024];
 static uint16_t cmos_scratch[64];
@@ -43,19 +50,126 @@ static const uint32_t crop_adtg_override[][2] = {
     {0x8882, 0x0410}, {0x8884, 0x0410}, {0x8886, 0x0413}, {0x8888, 0x0412},
 };
 
+/*---------------------- circuit-bend glitch engine ----------------------*
+ * Every value below was CAPTURED ON THIS BODY (1200D_hw_modes dwells,
+ * 2026-11-06 v8 run) — mutations only recombine sensor-legal atoms,
+ * never invent values. 4 danger tiers:
+ *   Hybrid : k regs get another of THEIR OWN observed values (stable)
+ *   Strobe : Hybrid picks re-rolled every ADTG table burst (~1/s in LV)
+ *   Splice : fixed cross-family grafts (H-window<-V-size etc, static)
+ *   Chaos  : Strobe + cross-family values + CMOS c4-c7 bent too
+ *------------------------------------------------------------------------*/
+struct adtg_pool { uint32_t reg; uint8_t n; uint16_t vals[4]; };
+static const struct adtg_pool adtg_pools[] = {
+    {0x8000, 2, {0x0005, 0x0006}},                 /* zoom selector */
+    {0x800C, 2, {0x0002, 0x0004}},
+    {0x805F, 4, {0x0058, 0x00C5, 0x00E9, 0x01D0}}, /* H window family */
+    {0x8061, 4, {0x0058, 0x00C5, 0x00E9, 0x01D0}},
+    {0x8172, 3, {0x03BB, 0x067D, 0x06F0}},         /* V size family */
+    {0x8173, 3, {0x02A6, 0x05FE, 0x0684}},
+    {0x8882, 4, {0x040B, 0x0410, 0x0415, 0x041C}}, /* timing quartet */
+    {0x8884, 4, {0x040B, 0x0410, 0x0414, 0x041D}},
+    {0x8886, 4, {0x040C, 0x0413, 0x0418, 0x041E}},
+    {0x8888, 4, {0x040B, 0x0412, 0x0417, 0x041D}},
+    {0x88C6, 2, {0x0452, 0x049E}},
+    {0x88CA, 2, {0x0425, 0x05AE}},
+    {0x88CE, 2, {0x0452, 0x049E}},
+    {0x88D2, 2, {0x0425, 0x05AE}},
+};
+static const uint16_t cmos_pools[][3] = {          /* {reg, v0, v1} */
+    {4, 0x014, 0x2D4}, {5, 0xC60, 0xC64},
+    {6, 0x800, 0xA6A}, {7, 0x001, 0x401},
+};
+
+/* Splice: deterministic cross-family grafts — legal atoms, illegal combos */
+static const uint32_t crop_adtg_splice[][2] = {
+    {0x805F, 0x06F0},   /* H window <- x10 V size   */
+    {0x8061, 0x02A6},   /* H window <- unzoom V size */
+    {0x8172, 0x01D0},   /* V size  <- 1080p H window */
+    {0x8173, 0x0058},   /* V size  <- P-LV H window  */
+    {0x8882, 0x049E}, {0x8884, 0x05AE}, {0x8886, 0x0452}, {0x8888, 0x0425},
+    {0x88C6, 0x041C}, {0x88CA, 0x0410}, {0x88CE, 0x041D}, {0x88D2, 0x0413},
+};
+
+/* xorshift32 — no libc rand dependency */
+static uint32_t glitch_rng = 0x12345678;
+static uint32_t glitch_rand(void)
+{
+    glitch_rng ^= glitch_rng << 13;
+    glitch_rng ^= glitch_rng >> 17;
+    glitch_rng ^= glitch_rng << 5;
+    return glitch_rng;
+}
+
+#define GLITCH_MAX_PICKS 12
+static struct { uint32_t reg; uint32_t val; int is_cmos; } glitch_picks[GLITCH_MAX_PICKS];
+static int glitch_npicks = 0;
+
+static uint16_t glitch_anyval(void)
+{
+    const struct adtg_pool *p = &adtg_pools[glitch_rand() % COUNT(adtg_pools)];
+    return p->vals[glitch_rand() % p->n];
+}
+
+static void glitch_roll(void)
+{
+    glitch_npicks = 0;
+    int k = COERCE(glitch_intensity, 1, 10);
+    int chaos = (crop_preset_index == CROP_1200D_GLITCH_CHAOS);
+    int tries = k * 6;
+    while(glitch_npicks < k && tries-- > 0)
+    {
+        const struct adtg_pool *p = &adtg_pools[glitch_rand() % COUNT(adtg_pools)];
+        int dup = 0;
+        for(int i = 0; i < glitch_npicks; i++)
+            if(!glitch_picks[i].is_cmos && glitch_picks[i].reg == p->reg) dup = 1;
+        if(dup) continue;
+        uint32_t v = chaos ? glitch_anyval() : p->vals[glitch_rand() % p->n];
+        glitch_picks[glitch_npicks].reg = p->reg;
+        glitch_picks[glitch_npicks].val = v;
+        glitch_picks[glitch_npicks].is_cmos = 0;
+        glitch_npicks++;
+    }
+    if(chaos)   /* bend one CMOS geometry reg too */
+    {
+        const uint16_t *cp = cmos_pools[glitch_rand() % COUNT(cmos_pools)];
+        glitch_picks[glitch_npicks].reg = cp[0];
+        glitch_picks[glitch_npicks].val = cp[1 + glitch_rand() % 2];
+        glitch_picks[glitch_npicks].is_cmos = 1;
+        glitch_npicks++;
+    }
+}
+
 static uint16_t crop_cmos_map(uint16_t reg, uint16_t val)
 {
-    if(crop_preset_index != CROP_1200D_ZOOM_CROP) return val;
-    for(unsigned i = 0; i < COUNT(crop_cmos_override); i++)
-        if(reg == crop_cmos_override[i][0]) return crop_cmos_override[i][1];
+    if(crop_preset_index == CROP_1200D_ZOOM_CROP)
+    {
+        for(unsigned i = 0; i < COUNT(crop_cmos_override); i++)
+            if(reg == crop_cmos_override[i][0]) return crop_cmos_override[i][1];
+    }
+    if(glitch_npicks)
+        for(int i = 0; i < glitch_npicks; i++)
+            if(glitch_picks[i].is_cmos && glitch_picks[i].reg == reg)
+                return (uint16_t) glitch_picks[i].val;
     return val;
 }
 
 static uint32_t crop_adtg_map(uint32_t reg, uint32_t val)
 {
-    if(crop_preset_index != CROP_1200D_ZOOM_CROP) return val;
-    for(unsigned i = 0; i < COUNT(crop_adtg_override); i++)
-        if(reg == crop_adtg_override[i][0]) return crop_adtg_override[i][1];
+    if(crop_preset_index == CROP_1200D_ZOOM_CROP)
+    {
+        for(unsigned i = 0; i < COUNT(crop_adtg_override); i++)
+            if(reg == crop_adtg_override[i][0]) return crop_adtg_override[i][1];
+    }
+    else if(crop_preset_index == CROP_1200D_GLITCH_SPLICE)
+    {
+        for(unsigned i = 0; i < COUNT(crop_adtg_splice); i++)
+            if(reg == crop_adtg_splice[i][0]) return crop_adtg_splice[i][1];
+    }
+    if(glitch_npicks)
+        for(int i = 0; i < glitch_npicks; i++)
+            if(!glitch_picks[i].is_cmos && glitch_picks[i].reg == reg)
+                return glitch_picks[i].val;
     return val;
 }
 
@@ -63,6 +177,10 @@ static void crop_adtg_hook(uint32_t *regs, uint32_t *stack, uint32_t pc)
 {
     (void)stack; (void)pc;
     if(crop_preset_index == CROP_1200D_OFF) return;
+    /* Strobe/Chaos: re-roll picks on every ADTG table burst (~1/s in LV) */
+    if(crop_preset_index == CROP_1200D_GLITCH_STROBE ||
+       crop_preset_index == CROP_1200D_GLITCH_CHAOS)
+        glitch_roll();
     uint32_t *src = (uint32_t *) regs[1];
     if(!src) return;
     uint32_t n = 0;
@@ -120,6 +238,7 @@ static int crop_install_hooks(void)
 static void crop_preset_toggle(void *priv, int delta)
 {
     crop_preset_index = COERCE(crop_preset_index + delta, 0, CROP_1200D_NUM - 1);
+    glitch_npicks = 0;
     if(crop_preset_index == CROP_1200D_OFF)
     {
         /* restore stock behavior but keep hooks (cheap, avoids site churn) */
@@ -131,6 +250,16 @@ static void crop_preset_toggle(void *priv, int delta)
         crop_preset_index = CROP_1200D_OFF;
         return;
     }
+    if(crop_preset_index >= CROP_1200D_GLITCH_HYBRID)
+    {
+        /* Hybrid/Chaos roll ONCE here (stable while running); Strobe/Chaos
+         * also re-roll per burst inside the hook. Splice is static. */
+        glitch_rng = (uint32_t) get_ms_clock() | 1;
+        if(crop_preset_index != CROP_1200D_GLITCH_SPLICE) glitch_roll();
+        NotifyBox(2000, "%s: %d reg%s bent",
+                  crop_names[crop_preset_index], glitch_npicks,
+                  glitch_npicks == 1 ? "" : "s");
+    }
     beep();
 }
 
@@ -141,7 +270,14 @@ static struct menu_entry crop_menu[] = {
         .priv = &crop_preset_index,
         .min = 0, .max = CROP_1200D_NUM - 1,
         .choices = (const char **) crop_names,
-        .help = "Enforce zoom-crop register set in normal movie LV. Experimental: LV/raw geometry not yet calibrated (needs zoom raw dump).",
+        .help = "Zoom-crop: enforce x5 register set. Glitch modes bend sensor regs with CAPTURED values only (safe atoms, unsafe combos). If LV becomes unusable: power off, delete ML/SETTINGS/crop_rec.cfg (desk-side) to reset.",
+        .depends_on = DEP_LIVEVIEW,
+    },
+    {
+        .name = "Glitch intensity",
+        .priv = &glitch_intensity,
+        .min = 1, .max = 10,
+        .help = "Regs bent per burst (Hybrid/Strobe/Chaos). Re-select the preset to re-roll Hybrid.",
         .depends_on = DEP_LIVEVIEW,
     },
 };
