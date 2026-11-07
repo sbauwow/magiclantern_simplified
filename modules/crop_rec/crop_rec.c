@@ -1,3 +1,4 @@
+#define CONFIG_1200D 1  /* module builds get no -D flags; only 1200D includes this module */
 #include <dryos.h>
 #include <module.h>
 #include <config.h>
