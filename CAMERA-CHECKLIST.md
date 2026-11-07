@@ -1,72 +1,59 @@
-# 1200D camera session — Tue 2026-11-03 evening
-# Build: color-crop-a7ed5a7df (md5 1b2d64f3b5c32b8cd4e12fc6028a9ef0)
-# Time needed: ~20 min camera + ~5 min desk
+# 1200D camera session — NEXT TEST (post 2026-11-06 crop-engine success)
+# Card is READY AS-IS: latest build (crop engine 6281dee3b+checklist 31f5af9a2),
+# crop.preset=0, modules lua+mlv_lite enabled. NO desk staging needed.
+# Time: ~15 min full session (Parts 1-3 are the core; Part 4 optional).
+# Desk context: skill magiclantern-1200d-build (STATE block first), 
+# modules/crop_rec/1200D_preset_derivation.txt, 1200D_hw_modes/
 
-# RESUME (Nov 6): build a7ed5a7df is ON the card already. Section A DONE, B mostly done
-# (boot OK; dual_iso load err noted; "audio not playing back" = the MLV clip, expected
-# silent). Run B2-retry, then C, D, E, then pull card for desk verify.
-# CORRECTIONS: selftest MUST run with RAW video OFF (A/B clips = Canon MOVs, not MLVs).
-# NEW: 5s Canon MOV playback test validates the audio output path.
+## PART 1 — ZOOM RAW DUMPS (geometry calibration, THE key data) ~4 min
+1. Boot. Modules → Load mlv_lite (if not loaded). Movie LV, rec size 1080p.
+2. RAW video ON (Movie menu). Record 3s in 1080p normal — sanity: works.
+3. Magnify → x5. Record ~8s raw. Note LV appearance while recording.
+4. Magnify → x10. Record ~8s raw.
+5. Magnify → full view. RAW video OFF.
+NOTE: if raw recording errors at a zoom level ("raw error falling back"),
+that is DATA — record which zoom level failed and what the screen said.
 
-## A. DESK — stage the card (~5 min)  [DONE Nov 3]
-1. Card in reader (firm seat). Mount: udisksctl mount -b /dev/sdX1
-2. On card: rename autoexec.bin -> autoexec.edmac-diag.bak (preserves the EDMAC diag build)
-3. Copy onto card:
-   - ~/magiclantern/platform/1200D.102/build/autoexec.bin          -> card root
-   - ~/magiclantern/platform/1200D.102/build/zip/ML/*               -> card ML/   (modules + t5_102.sym — MUST go together with autoexec.bin)
-   - ~/magiclantern/platform/1200D.102/scripts/selftest.lua        -> card ML/SCRIPTS/   (NOT in zip — manual copy)
-4. Verify: md5sum card autoexec.bin == 1b2d64f3b5c32b8cd4e12fc6028a9ef0
-5. Card needs >= 4 GB free (clips are ~55 MB/s raw)
-6. sync, udisksctl unmount, power off reader, pull
+## PART 2 — CROP PRESET MATRIX ~3 min (crop_rec and adtg_log CONFLICT —
+   never run both; crop tests FIRST, logger only in Part 3)
+6. Modules → Load crop_rec. Movie tab → "Crop preset (1200D)" → toggle to
+   Zoom-crop (beep). Watch LV 15s; if nothing, exit+re-enter LV once.
+7. Q-button toggles it OFF. Confirm LV recovers clean.
+8. Repeat once with rec size 720p (preset ON → observe → OFF).
+NOTE per state: EXACT appearance — red/orange scramble? partially readable?
+stretched/squeezed? frozen? dim? This matrix feeds the geometry fix.
 
-## B. BOOT + SANITY (~3 min)  [boot OK Nov 4 — only B4/B5 remain]
-1. Card in, power on. ML boots (TRASH button = menu). Debug tab = last tab (RIGHT arrow / main dial)
-2. Modules tab: load-check these — adtg_log, raw_vidx (NEW), lua, mlv_lite, mlv_rec
-   -> select each once (Load) if not marked loaded; note ANY red "load failed" text
-3. Sanity: Movie mode, enter LV, confirm mlv_lite raw record works as before
-4. DUAL_ISO RETRY (Nov 4 err): Modules tab -> dual_iso -> Load it ALONE
-   (suspected batch artifact). Loads OK -> done. Fails alone -> note exact red text.
-5. CANON MOV PLAYBACK TEST: RAW video OFF, mic in, record 5s normal MOV, play it back
-   in-camera (expect AUDIBLE). This closes the Nov 4 "audio not playing back" question.
+## PART 3 — MODE LABELS via adtg_log ~3 min
+9. Modules → Load adtg_log. Debug → "ADTG/CMOS log (1200D)" → select →
+   cycle immediately, 15s dwell each: Movie-1080p → Movie-720p (Canon MENU,
+   red movie tab) → P-mode + LV → back to Movie. Select entry again to save.
+   (Buffer rolls to parts automatically; no timing pressure. If idle-saved
+   early — select again and keep switches under ~25s apart.)
+10. Power off. Card → reader → tell Hermes "keep going".
 
-## C. ADTG/CMOS DUMP — crop_rec data (~6 min)   [BEFORE selftest; v3 build f3ddc81b1+]
-1. Movie mode, LV on, 1080p
-2. ML menu -> Debug -> "ADTG/CMOS log (1200D)" -> select (starts; screen shows "cmos: buf N% SET=stop")
-3. Screen shows live cmos values + buffer %. Values animate while toggling = watchpoints firing.
-4. Cycle modes, ~30s each, no recording:
-   1080p -> 720p -> zoom x5 (MAGNIFY btn, top-right rear) -> zoom x10 -> back to 1080p
-   -> P-mode LV 30s (full-sensor reference) -> back to Movie 1080p
-5. SAVE: select the SAME menu entry AGAIN -> "stopping + saving..." -> beep ->
-   "ADTG dump saved: DCIM/adtg.bin". DO NOT POWER OFF BEFORE THIS — buffer is RAM-only.
-   (Auto-fallbacks: 30s idle auto-saves; 100% full auto-saves.)
+## PART 4 — optional leftovers
+11. Selftest: RAW video OFF, mic connected, Modules → Lua → run 'selftest',
+    hands off until "Self-test complete."
+12. One 5s Canon MOV with mic, play back in-camera (audible y/n?).
 
-## D. SELFTEST SCRIPT (~2.5 min runtime)
-0. RAW video OFF first! (Movie menu: RAW video -> OFF. A/B audio clips must be Canon
-   MOVs or the loudness A/B measures nothing. Verify: record icon shows normal MOV, no
-   raw overlay/banner)
-1. Still in Movie mode, LV on, MIC CONNECTED (A/B audio test)
-2. Modules tab -> Lua -> Run script 'selftest'  (first time: Load module lua)
-3. Leave it alone until console prints "Self-test complete." (~2.5 min:
-   A clip 8s -> B clip 8s -> EDMAC monitor + test RAW photo + 35s wait -> 20s rate clip)
-4. Produces: ML/LOGS/SELFTEST.TXT, ML/LOGS/EDMACMon.TXT, 4 MLV clips
+## FIELD REPORT CHECKLIST (terse notes are fine)
+- P1: raw recorded at x5/x10 y/n; error text if any
+- P2: preset appearance per rec size; OFF recovery y/n
+- P3: logger saved y/n, how many parts
+- P4 (if run): selftest completed y/n; MOV audible y/n
+- Anything red, any hang (power-off always safe; completed part files survive)
 
-## E. ONE RAW CLIP WITH NEW BUILD (~1 min)
-Record ~10s raw video in 1080p (this validates the color/IDNT fix — the MLV
-header should now carry cameraModel 0x80000327; PC check confirms)
+## DESK-SIDE AFTER (Hermes)
+- Parse Part 1 MLVs: raw_info dims per zoom level → pixels-per-unit for
+  8172/8173 + 805F/8061 → geometry update in crop_rec when crop engages
+  (kills the red/orange scramble) → then real 3K presets per derivation file
+- Parse Part 3: confirm the four 888x normal-mode labels
+- Open threads: EDMAC photo-raw (EDMACMon never captured), dual_iso runtime
+  (links clean; needs photo-raw first), MOV/mic playback question
 
-## F. DESK — verification (~2 min)
-bash ~/scripts/mlv_ingest.sh /run/media/stathis/<card>
-Expect per clip: frames MATCH + "DNG-CHECK: OK UniqueCameraModel='Canon EOS 1200D'
-ColorMatrix2=dcraw-1200D exact". DON'T delete anything from the card.
-
-## REPORT BACK (field notes, I take it from there)
-- boot OK / weirdness (solid red LED, hangs, red text)
-- module load failures (exact names)
-- C3: cmos panel animated y/n; C5: beep y/n
-- ingest output (or just hand me the card dirs)
-- files to preserve: ML/LOGS/*, DCIM/adtg.bin, all new MLVs
-
-## RECOVERY
-- Solid red LED at boot = loader stage died -> reseat card, re-verify md5
-- Boot fine WITHOUT card = bootflag intact, card is the suspect
-- Restore 2018 nightly: rename autoexec.2018-nightly.bak -> autoexec.bin
+## RECOVERY (unchanged)
+- Solid red at boot = loader died → reseat card
+- Boots with NO card = bootflag intact, card suspect
+- Screen too garbled to menu → power off, pull card, desk-zero
+  ML/SETTINGS/crop_rec.cfg (crop.preset = 0)
+- Restore 2018: rename autoexec.2018-nightly.bak → autoexec.bin
